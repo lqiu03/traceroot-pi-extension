@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { persistSessionTrace, readSessionTrace } from './fork-link.ts';
+import { persistSessionTrace, pruneStaleSessionTraces, readSessionTrace } from './fork-link.ts';
 
 const VALID = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) };
 
@@ -60,4 +60,59 @@ test('a null session file is a no-op, not an error', () => {
     persistSessionTrace(dir, null, VALID);
     assert.equal(readSessionTrace(dir, null), null);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Pruning — the state dir must not grow one file per session forever
+// ---------------------------------------------------------------------------
+
+function ageFile(path: string, ageMs: number): void {
+  const old = (Date.now() - ageMs) / 1000;
+  utimesSync(path, old, old);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps fresh ones', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
+  try {
+    const stale = '/d/stale.jsonl';
+    const fresh = '/d/fresh.jsonl';
+    persistSessionTrace(dir, stale, VALID);
+    const staleEntry = readdirSync(dir).find((name) => name.endsWith('.json'));
+    assert.ok(staleEntry, 'the stale session produced an entry file');
+    persistSessionTrace(dir, fresh, VALID);
+    const staleTmp = join(dir, 'crashed-write.tmp');
+    writeFileSync(staleTmp, 'partial');
+    ageFile(join(dir, staleEntry), 31 * DAY_MS);
+    ageFile(staleTmp, 31 * DAY_MS);
+
+    await pruneStaleSessionTraces(dir);
+
+    assert.equal(existsSync(join(dir, staleEntry)), false, '31-day-old entry pruned');
+    assert.equal(existsSync(staleTmp), false, 'crashed atomic-write leftover pruned');
+    assert.deepEqual(readSessionTrace(dir, fresh), VALID, 'the fresh entry survives');
+    assert.equal(readSessionTrace(dir, stale), null, 'the stale session no longer links');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pruneStaleSessionTraces keeps entries newer than the cutoff', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
+  try {
+    const recent = '/d/recent.jsonl';
+    persistSessionTrace(dir, recent, VALID);
+    const entry = readdirSync(dir).find((name) => name.endsWith('.json'));
+    assert.ok(entry);
+    ageFile(join(dir, entry), 5 * DAY_MS); // well inside the 30-day window
+    await pruneStaleSessionTraces(dir);
+    assert.deepEqual(readSessionTrace(dir, recent), VALID);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pruneStaleSessionTraces on a missing directory is a silent no-op', async () => {
+  await pruneStaleSessionTraces(join(tmpdir(), 'tr-fork-definitely-does-not-exist'));
 });
