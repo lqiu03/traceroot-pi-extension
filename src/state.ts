@@ -118,6 +118,10 @@ function endToolSpans(state: SpanState): void {
 
 function endLlmSpans(state: SpanState): void {
   for (const entry of state.llmSpans.values()) {
+    // Mirror the tool sweep's tool_incomplete: an LLM span force-closed here (Esc
+    // mid-generation, quit mid-call) never saw its turn_end, so without a marker it
+    // exports indistinguishable from a normally completed round-trip.
+    setAttr(entry.span, 'traceroot.pi.turn_incomplete', true);
     endSpan(entry.span);
   }
   state.llmSpans.clear();
@@ -135,7 +139,14 @@ export function sweepTurnScoped(state: SpanState): void {
 
 // Close every open span in reverse nesting order: tools -> LLM -> turn -> session.
 // Used on session_shutdown so a hard exit (even mid-tool) never leaks an open span.
-export function closeAllOpenSpans(state: SpanState, reason: string): void {
+// sessionOutput (typically state.lastAssistantText, already content-gated at capture)
+// becomes the session's Output panel — written HERE so every close path records it:
+// quit, transitions, /traceroot disable, and the defensive close in session_start.
+export function closeAllOpenSpans(
+  state: SpanState,
+  reason: string,
+  sessionOutput: string | null = null,
+): void {
   sweepTurnScoped(state);
 
   if (state.compactionSpan) {
@@ -150,6 +161,7 @@ export function closeAllOpenSpans(state: SpanState, reason: string): void {
   }
 
   if (state.sessionSpan) {
+    if (sessionOutput) setAttr(state.sessionSpan, 'traceroot.span.output', sessionOutput);
     setAttr(state.sessionSpan, 'traceroot.pi.shutdown_reason', reason);
     endSpan(state.sessionSpan);
     state.sessionSpan = null;
@@ -193,7 +205,8 @@ export function resetForNewSession(state: SpanState): void {
 // state. providerShutdown is process-scoped and deliberately preserved.
 export function beginNewSession(state: SpanState, closeReason: string): void {
   // closeReason is the shutdown reason recorded on the spans being CLOSED, not the new
-  // session's reason — the new session has no spans yet.
-  closeAllOpenSpans(state, closeReason);
+  // session's reason — the new session has no spans yet. The closing session's last
+  // assistant text becomes its Output panel; resetForNewSession clears it afterwards.
+  closeAllOpenSpans(state, closeReason, state.lastAssistantText);
   resetForNewSession(state);
 }

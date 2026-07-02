@@ -94,6 +94,60 @@ test('resetForNewSession clears session identity so a fresh session span opens',
   assert.equal(state.thinkingLevel, null);
 });
 
+// A fake span that records attributes, for tests that assert what a sweep stamps.
+function recordingSpan(label: string): { span: Span; attrs: Record<string, unknown> } {
+  const attrs: Record<string, unknown> = {};
+  const span = {
+    end: () => ended.push(label),
+    setAttribute: (key: string, value: unknown) => {
+      attrs[key] = value;
+      return span;
+    },
+    addEvent: () => span,
+    spanContext: () => ({ traceId: 't', spanId: 's', traceFlags: 1 }),
+  } as unknown as Span;
+  return { span, attrs };
+}
+
+test('sweepTurnScoped marks force-closed LLM spans incomplete, like tool spans', () => {
+  ended.length = 0;
+  const state = createSpanState();
+  const llm = recordingSpan('llm');
+  const tool = recordingSpan('tool');
+  state.llmSpans.set(0, { span: llm.span, ctx: fakeCtx('llm'), startTime: 0, turnIndex: 0 });
+  state.toolSpans.set('tc1', { span: tool.span, startTime: 0, toolName: 'read' });
+
+  sweepTurnScoped(state);
+
+  assert.equal(tool.attrs['traceroot.pi.tool_incomplete'], true, 'tool marker (pre-existing)');
+  assert.equal(
+    llm.attrs['traceroot.pi.turn_incomplete'],
+    true,
+    'an aborted LLM round-trip must not export indistinguishable from a completed one',
+  );
+});
+
+test('closeAllOpenSpans records the session output on every close path', () => {
+  ended.length = 0;
+  const state = createSpanState();
+  const session = recordingSpan('session');
+  state.sessionSpan = session.span;
+
+  closeAllOpenSpans(state, 'disabled', 'the final assistant answer');
+
+  assert.equal(session.attrs['traceroot.span.output'], 'the final assistant answer');
+  assert.equal(session.attrs['traceroot.pi.shutdown_reason'], 'disabled');
+  assert.deepEqual(ended, ['session']);
+});
+
+test('closeAllOpenSpans omits the output attribute when there is none', () => {
+  const state = createSpanState();
+  const session = recordingSpan('session');
+  state.sessionSpan = session.span;
+  closeAllOpenSpans(state, 'quit', null);
+  assert.equal('traceroot.span.output' in session.attrs, false);
+});
+
 test('activeParentCtx prefers the open LLM span', () => {
   const state = createSpanState();
   state.sessionCtx = fakeCtx('session');
