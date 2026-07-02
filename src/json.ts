@@ -25,3 +25,52 @@ export function safeJsonTruncate(value: unknown, maxChars: number): string {
   if (maxChars <= 0) return '';
   return serialized.length > maxChars ? safeSlice(serialized, maxChars) + ELLIPSIS : serialized;
 }
+
+// Budget-aware serializer for the LLM hot path. JSON.stringify has no early exit, so
+// safeJsonTruncate on a full request payload serializes an entire late-session
+// conversation (often megabytes) to keep at most ~16KB — twice per LLM call. Arrays
+// and plain objects are emitted element-by-element from the FRONT (truncation keeps
+// the head), stopping once the budget is spent; each element is stringified whole, so
+// cost is O(budget + one overshooting element) instead of O(total payload).
+// The emitted prefix is byte-identical to JSON.stringify's, so when the value fits
+// the budget the output matches safeJsonTruncate exactly, and when it does not the
+// truncated result is the same head-slice + ellipsis the old code produced.
+export function boundedJsonHead(value: unknown, maxChars: number): string {
+  if (maxChars <= 0) return '';
+  if (typeof value === 'string') return safeJsonTruncate(value, maxChars);
+  try {
+    if (Array.isArray(value)) {
+      let out = '[';
+      for (let i = 0; i < value.length; i++) {
+        if (i > 0) out += ',';
+        out += JSON.stringify(value[i]) ?? 'null'; // undefined/function elements are null, per JSON.stringify
+        if (out.length > maxChars) return safeSlice(out, maxChars) + ELLIPSIS;
+      }
+      out += ']';
+      return out.length > maxChars ? safeSlice(out, maxChars) + ELLIPSIS : out;
+    }
+    if (value && typeof value === 'object') {
+      // Objects with toJSON (Date, custom classes) must round-trip through the real
+      // serializer or the prefix would not match JSON.stringify's output.
+      if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+        return safeJsonTruncate(value, maxChars);
+      }
+      const record = value as Record<string, unknown>;
+      let out = '{';
+      let first = true;
+      for (const key of Object.keys(record)) {
+        const fieldJson = JSON.stringify(record[key]);
+        if (fieldJson === undefined) continue; // functions/undefined are skipped, per JSON.stringify
+        if (!first) out += ',';
+        first = false;
+        out += `${JSON.stringify(key)}:${fieldJson}`;
+        if (out.length > maxChars) return safeSlice(out, maxChars) + ELLIPSIS;
+      }
+      out += '}';
+      return out.length > maxChars ? safeSlice(out, maxChars) + ELLIPSIS : out;
+    }
+    return safeJsonTruncate(value, maxChars);
+  } catch {
+    return '[unserializable]';
+  }
+}

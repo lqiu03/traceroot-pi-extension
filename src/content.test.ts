@@ -29,6 +29,34 @@ test('renderMessageContent truncates with an ellipsis', () => {
   assert.equal(renderMessageContent('abcdef', 3), 'abc…');
 });
 
+test('renderMessageContent early-exit yields the same output as rendering every block', () => {
+  // The budget break is a pure optimization: the truncated result must be identical
+  // to joining everything first. Unrecognized no-op blocks are interspersed to pin
+  // the budget accounting (they must not consume budget they did not emit).
+  const blocks: unknown[] = [];
+  for (let i = 0; i < 50; i++) {
+    blocks.push({ type: 'text', text: `block ${i} ${'pad'.repeat(10)}` });
+    blocks.push({ unknownShape: true }); // renders nothing
+  }
+  const budget = 300;
+  const expected = (() => {
+    const all = blocks
+      .map((b) => (b as { text?: string }).text)
+      .filter((t): t is string => typeof t === 'string')
+      .join('\n');
+    return all.length > budget ? all.slice(0, budget) + '…' : all;
+  })();
+  assert.equal(renderMessageContent(blocks, budget), expected);
+});
+
+test('renderMessageContent does not truncate when content is exactly within budget', () => {
+  const blocks = [
+    { type: 'text', text: 'aaa' },
+    { type: 'text', text: 'bbb' },
+  ];
+  assert.equal(renderMessageContent(blocks, 7), 'aaa\nbbb', 'no spurious ellipsis at the boundary');
+});
+
 test('renderToolResult reads AgentToolResult content arrays', () => {
   const result = { content: [{ type: 'text', text: 'total 8\nfile.txt' }] };
   assert.equal(renderToolResult(result, 100), 'total 8\nfile.txt');

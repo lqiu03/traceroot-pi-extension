@@ -34,8 +34,13 @@ export function renderMessageContent(content: unknown, maxChars: number): string
   if (!Array.isArray(content)) return safeJsonTruncate(content, maxChars);
 
   const parts: string[] = [];
+  let accumulated = 0;
   for (const block of content as ContentBlock[]) {
+    // Budget check: once past maxChars, further blocks cannot appear in the truncated
+    // output — accumulating a multi-hundred-KB tool result to keep 4KB is pure cost.
+    if (accumulated > maxChars) break;
     if (block == null) continue;
+    const before = parts.length;
     if (typeof block === 'string') {
       parts.push(block);
     } else if (typeof block.text === 'string') {
@@ -46,6 +51,7 @@ export function renderMessageContent(content: unknown, maxChars: number): string
     } else if (block.type) {
       parts.push(`[${block.type}]`);
     }
+    if (parts.length > before) accumulated += (parts[before]?.length ?? 0) + 1;
   }
   return truncate(parts.join('\n'), maxChars);
 }
