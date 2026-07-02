@@ -3,7 +3,7 @@
 // All operations are best-effort; failure degrades to "no link", never an error.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readdir, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { createHash } from 'node:crypto';
 import { isSpanId, isTraceId } from './hex.ts';
 
@@ -12,10 +12,22 @@ export interface PersistedTrace {
   spanId: string;
 }
 
+// The exact shape of a file this module owns under the state dir: a 32-hex continuity
+// entry, or its per-pid atomic-write temp. Pruning is scoped to this so a state dir the
+// user points at a shared location (via TRACEROOT_STATE_DIR) never has unrelated files
+// deleted.
+const OWNED_STATE_FILE = /^[0-9a-f]{32}\.json(\.\d+\.tmp)?$/;
+
 // Key by a hash of the FULL session-file path, not just its basename: two sessions with
-// the same filename in different directories would otherwise collide and cross-link.
+// the same filename in different directories would otherwise collide and cross-link. The
+// path is resolved first (relative -> absolute, redundant separators and ./.. segments
+// collapsed) so equivalent spellings of the same file hash to the same key across a
+// persist and a later read/fork. (Symlink and case canonicalization are deliberately
+// not applied: realpath needs the file to still exist and is a syscall, and lowercasing
+// would make two genuinely distinct files collide on case-sensitive volumes. Upgrading
+// past this change re-keys existing entries once — acceptable for best-effort links.)
 function fileFor(stateDir: string, sessionFile: string): string {
-  const key = createHash('sha256').update(sessionFile).digest('hex').slice(0, 32);
+  const key = createHash('sha256').update(resolvePath(sessionFile)).digest('hex').slice(0, 32);
   return join(stateDir, `${key}.json`);
 }
 
@@ -38,7 +50,8 @@ export async function pruneStaleSessionTraces(
   try {
     const cutoff = Date.now() - maxAgeMs;
     for (const name of await readdir(stateDir)) {
-      if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue;
+      // Only ever touch files this module created; the state dir may be shared.
+      if (!OWNED_STATE_FILE.test(name)) continue;
       const file = join(stateDir, name);
       try {
         const info = await stat(file);

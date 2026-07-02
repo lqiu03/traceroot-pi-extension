@@ -73,6 +73,9 @@ function ageFile(path: string, ageMs: number): void {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// A file name shaped exactly like one this module creates.
+const HEX32 = 'a'.repeat(32);
+
 test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps fresh ones', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
   try {
@@ -82,7 +85,8 @@ test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps 
     const staleEntry = readdirSync(dir).find((name) => name.endsWith('.json'));
     assert.ok(staleEntry, 'the stale session produced an entry file');
     persistSessionTrace(dir, fresh, VALID);
-    const staleTmp = join(dir, 'crashed-write.tmp');
+    // A crashed atomic write leaves a file named like a real temp: <32hex>.json.<pid>.tmp.
+    const staleTmp = join(dir, `${HEX32}.json.99999.tmp`);
     writeFileSync(staleTmp, 'partial');
     ageFile(join(dir, staleEntry), 31 * DAY_MS);
     ageFile(staleTmp, 31 * DAY_MS);
@@ -93,6 +97,50 @@ test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps 
     assert.equal(existsSync(staleTmp), false, 'crashed atomic-write leftover pruned');
     assert.deepEqual(readSessionTrace(dir, fresh), VALID, 'the fresh entry survives');
     assert.equal(readSessionTrace(dir, stale), null, 'the stale session no longer links');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pruneStaleSessionTraces never touches files it does not own, even when old', async () => {
+  // The state dir is user-configurable (TRACEROOT_STATE_DIR); if it is pointed at a
+  // shared directory, pruning must delete only this module's hashed continuity files —
+  // not arbitrary .json/.tmp files that happen to be old.
+  const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
+  try {
+    const foreign = [
+      join(dir, 'user-notes.json'), // wrong name shape
+      join(dir, 'session-backup.tmp'), // wrong name shape
+      join(dir, `${HEX32}.txt`), // right hash, wrong extension
+      join(dir, `${HEX32.toUpperCase()}.json`), // uppercase hex — not what we write
+    ];
+    for (const f of foreign) {
+      writeFileSync(f, 'important');
+      ageFile(f, 365 * DAY_MS); // a year old — well past the cutoff
+    }
+
+    await pruneStaleSessionTraces(dir);
+
+    for (const f of foreign) {
+      assert.equal(existsSync(f), true, `unrelated file preserved: ${f}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('equivalent spellings of a session-file path link to the same trace', async () => {
+  // relative-vs-absolute / redundant-separator differences between the persist path
+  // and a later read/fork path must not lose the parent link.
+  const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
+  try {
+    persistSessionTrace(dir, '/projects/app/sessions/current.jsonl', VALID);
+    // Same file, spelled with a redundant ./.. detour and a doubled separator.
+    assert.deepEqual(
+      readSessionTrace(dir, '/projects/app/other/../sessions//current.jsonl'),
+      VALID,
+      'a normalized-equivalent path resolves to the same continuity entry',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
