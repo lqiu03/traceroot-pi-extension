@@ -1,48 +1,98 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFileLogger } from './logger.ts';
 
-test('a logger with no path is a no-op and never throws', () => {
+// POSIX mode bits are meaningless on win32 (chmod only toggles the read-only
+// attribute; ACLs govern access), so the owner-only assertions are POSIX-only.
+// CI runs them on Linux; on Windows the content/behavior assertions still run.
+const POSIX = process.platform !== 'win32';
+
+test('a logger with no path is a no-op and never throws', async () => {
   const logger = createFileLogger(undefined);
   logger.log('debug', 'ignored'); // must not throw
+  await logger.flush();
 });
 
-test('createFileLogger writes a NEW debug log owner-only and creates the directory', () => {
+test('createFileLogger creates the directory, writes owner-only, and persists lines on flush', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
   try {
     const file = join(dir, 'sub', 'debug.log');
     const logger = createFileLogger(file);
     logger.log('debug', 'hello', { a: 1 });
-    const mode = statSync(file).mode & 0o777;
-    assert.equal(
-      mode & 0o077,
-      0,
-      `debug log must not be group/world accessible (mode=${mode.toString(8)})`,
+    await logger.flush();
+    const content = readFileSync(file, 'utf8');
+    assert.match(content, /"message":"hello"/, 'the line is on disk after flush');
+    assert.match(content, /"a":1/, 'structured data is recorded');
+    if (POSIX) {
+      const mode = statSync(file).mode & 0o777;
+      assert.equal(
+        mode & 0o077,
+        0,
+        `debug log must not be group/world accessible (mode=${mode.toString(8)})`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('createFileLogger tightens permissions on a PRE-EXISTING world-readable log file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
+  try {
+    const file = join(dir, 'debug.log');
+    writeFileSync(file, 'old line\n');
+    if (POSIX) {
+      chmodSync(file, 0o644); // simulate a pre-existing group/world-readable log
+      assert.notEqual(statSync(file).mode & 0o077, 0, 'precondition: file starts broadly readable');
+    }
+    const logger = createFileLogger(file);
+    logger.log('debug', 'new line');
+    await logger.flush();
+    assert.match(readFileSync(file, 'utf8'), /old line[\s\S]*new line/, 'appends, not truncates');
+    if (POSIX) {
+      const mode = statSync(file).mode & 0o777;
+      assert.equal(
+        mode & 0o077,
+        0,
+        `a pre-existing log must be tightened to owner-only (mode=${mode.toString(8)})`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('lines logged in the same tick are preserved in order through one buffered flush', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
+  try {
+    const file = join(dir, 'debug.log');
+    const logger = createFileLogger(file);
+    for (let i = 0; i < 5; i++) logger.log('debug', `line-${i}`);
+    await logger.flush();
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 5, 'every buffered line lands');
+    assert.deepEqual(
+      lines.map((line) => (JSON.parse(line) as { message: string }).message),
+      ['line-0', 'line-1', 'line-2', 'line-3', 'line-4'],
+      'order is preserved',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('createFileLogger tightens permissions on a PRE-EXISTING world-readable log file', () => {
+test('a sink that dies mid-session degrades to a silent no-op', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
-  try {
-    const file = join(dir, 'debug.log');
-    writeFileSync(file, 'old line\n');
-    chmodSync(file, 0o644); // simulate a pre-existing group/world-readable log
-    assert.notEqual(statSync(file).mode & 0o077, 0, 'precondition: file starts broadly readable');
-    const logger = createFileLogger(file);
-    logger.log('debug', 'new line');
-    const mode = statSync(file).mode & 0o777;
-    assert.equal(
-      mode & 0o077,
-      0,
-      `a pre-existing log must be tightened to owner-only (mode=${mode.toString(8)})`,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const file = join(dir, 'debug.log');
+  const logger = createFileLogger(file);
+  logger.log('debug', 'first');
+  await logger.flush();
+  rmSync(dir, { recursive: true, force: true }); // the log directory disappears
+  logger.log('debug', 'after-death'); // must not throw
+  await logger.flush();
+  logger.log('debug', 'still-silent');
+  await logger.flush();
 });
