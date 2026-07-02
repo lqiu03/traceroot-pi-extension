@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import {
+  BOOLEAN_CONFIG_FIELDS,
   BOOLEAN_ENV_KEYS,
   collectEnvIssues,
+  collectProxyIssues,
   envRaw,
   resolve,
   sanitizeFileConfig,
+  STRING_CONFIG_FIELDS,
   validateConfig,
 } from './config.ts';
+import { restoreEnv } from './test-support.ts';
 import type { ConfigIssue, RawConfig } from './config.ts';
 
 test('resolve applies cloud defaults', () => {
@@ -203,6 +207,46 @@ test('sanitizeFileConfig drops type-mismatched boolean fields and warns (global 
   assert.ok(issues.some((i: ConfigIssue) => i.path.includes('captureToolIo')));
 });
 
+test('sanitizeFileConfig drops type-mismatched string fields and warns', () => {
+  // A numeric stateDir previously flowed into join() at extension load — OUTSIDE the
+  // config try/catch — and crashed the host; a numeric token became "Bearer 123".
+  const raw = {
+    stateDir: 123,
+    token: 42,
+    apiUrl: 'https://ok.example',
+    debug: true,
+  } as unknown as RawConfig;
+  const { sanitized, issues } = sanitizeFileConfig(raw, '/cfg.json');
+  const record = sanitized as Record<string, unknown>;
+  assert.equal('stateDir' in record, false, 'a numeric stateDir is dropped');
+  assert.equal('token' in record, false, 'a numeric token is dropped');
+  assert.equal(record.apiUrl, 'https://ok.example', 'a valid string field is kept');
+  assert.equal(record.debug, true, 'a valid boolean field is kept');
+  assert.ok(issues.some((i: ConfigIssue) => i.path.includes('stateDir')));
+  assert.ok(issues.some((i: ConfigIssue) => i.path.includes('token')));
+});
+
+test('every RawConfig field is type-checked by sanitizeFileConfig (drift guard)', () => {
+  // Parse the RawConfig type literal from source: a field added there but missing from
+  // both sanitize lists would flow into typed config unchecked — the exact gap that
+  // let a numeric stateDir crash extension load.
+  const src = readFileSync(new URL('./config.ts', import.meta.url), 'utf8');
+  const block = src.match(/export type RawConfig = Partial<\{([\s\S]*?)\}>/)?.[1] ?? '';
+  const fields = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1] ?? '');
+  assert.ok(fields.length >= 20, 'sanity: found the RawConfig fields in source');
+  const covered = new Set<string>([
+    ...BOOLEAN_CONFIG_FIELDS,
+    ...STRING_CONFIG_FIELDS,
+    'additionalMetadata',
+  ]);
+  const missing = fields.filter((field) => !covered.has(field));
+  assert.deepEqual(
+    missing,
+    [],
+    `RawConfig fields not covered by any sanitize list: ${missing.join(', ')}`,
+  );
+});
+
 test('sanitizeFileConfig drops non-object additionalMetadata and warns', () => {
   const raw = { additionalMetadata: [1, 2] } as unknown as RawConfig;
   const { sanitized, issues } = sanitizeFileConfig(raw, '/cfg.json');
@@ -220,6 +264,64 @@ test('sanitizeFileConfig keeps well-typed values and emits no issues', () => {
   const { sanitized, issues } = sanitizeFileConfig(raw, '/cfg.json');
   assert.deepEqual(issues, []);
   assert.equal((sanitized as Record<string, unknown>).enabled, true);
+});
+
+// ---------------------------------------------------------------------------
+// collectProxyIssues — the exporter does not honor proxy env vars
+// ---------------------------------------------------------------------------
+
+function withProxyEnv(env: Record<string, string | undefined>, fn: () => void): void {
+  const saved = { ...process.env };
+  try {
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
+      delete process.env[name];
+    }
+    for (const [name, value] of Object.entries(env)) {
+      if (value !== undefined) process.env[name] = value;
+    }
+    fn();
+  } finally {
+    restoreEnv(saved);
+  }
+}
+
+test('a proxy env var on an enabled cloud config produces a startup warning', () => {
+  withProxyEnv({ HTTPS_PROXY: 'http://proxy.corp:8080' }, () => {
+    const issues = collectProxyIssues(resolve({ enabled: true, token: 't' }));
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0]?.severity, 'warning');
+    assert.equal(issues[0]?.path, 'HTTPS_PROXY', 'the message names the variable that is set');
+    assert.match(issues[0]?.message ?? '', /not honored/);
+  });
+});
+
+test('lowercase https_proxy is detected too', () => {
+  withProxyEnv({ https_proxy: 'http://proxy.corp:8080' }, () => {
+    const issues = collectProxyIssues(resolve({ enabled: true, token: 't' }));
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0]?.path, 'https_proxy');
+  });
+});
+
+test('no proxy warning when tracing is disabled, no proxy is set, or the endpoint is loopback', () => {
+  withProxyEnv({ HTTPS_PROXY: 'http://proxy.corp:8080' }, () => {
+    assert.deepEqual(collectProxyIssues(resolve({ enabled: false })), [], 'disabled: no warning');
+    // Loopback endpoints connect locally by design; a proxy warning there is pure noise.
+    assert.deepEqual(
+      collectProxyIssues(resolve({ enabled: true, token: 't', localMode: true })),
+      [],
+      'localhost endpoint: no warning',
+    );
+  });
+  withProxyEnv({}, () => {
+    assert.deepEqual(collectProxyIssues(resolve({ enabled: true, token: 't' })), []);
+  });
+});
+
+test('an empty-string proxy var does not warn', () => {
+  withProxyEnv({ HTTPS_PROXY: '' }, () => {
+    assert.deepEqual(collectProxyIssues(resolve({ enabled: true, token: 't' })), []);
+  });
 });
 
 test('validateConfig errors on a malformed url', () => {

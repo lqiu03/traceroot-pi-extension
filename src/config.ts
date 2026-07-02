@@ -37,6 +37,12 @@ export interface TracerootPiConfig {
   debug: boolean;
   logFile?: string;
   captureFullPayload: boolean;
+  /**
+   * Prompt and response text on the session/turn/LLM Input–Output panels. When false,
+   * spans carry only metadata (timing, tokens, counts, error state) — the one switch
+   * that keeps conversation content on-machine entirely.
+   */
+  captureContent: boolean;
   captureToolIo: boolean;
   showUiIndicator: boolean;
   stateDir: string;
@@ -62,6 +68,7 @@ export type RawConfig = Partial<{
   debug: boolean;
   logFile: string;
   captureFullPayload: boolean;
+  captureContent: boolean;
   captureToolIo: boolean;
   showUiIndicator: boolean;
   stateDir: string;
@@ -102,6 +109,7 @@ export const BOOLEAN_ENV_KEYS = [
   'TRACEROOT_LOCAL_MODE',
   'TRACEROOT_PI_DEBUG',
   'TRACEROOT_CAPTURE_FULL_PAYLOAD',
+  'TRACEROOT_CAPTURE_CONTENT',
   'TRACEROOT_CAPTURE_TOOL_IO',
   'TRACEROOT_SHOW_UI',
 ];
@@ -179,6 +187,7 @@ export function envRaw(): RawConfig {
     debug: boolEnv('TRACEROOT_PI_DEBUG'),
     logFile: strEnv('TRACEROOT_LOG_FILE'),
     captureFullPayload: boolEnv('TRACEROOT_CAPTURE_FULL_PAYLOAD'),
+    captureContent: boolEnv('TRACEROOT_CAPTURE_CONTENT'),
     captureToolIo: boolEnv('TRACEROOT_CAPTURE_TOOL_IO'),
     showUiIndicator: boolEnv('TRACEROOT_SHOW_UI'),
     stateDir: strEnv('TRACEROOT_STATE_DIR'),
@@ -234,6 +243,7 @@ export function resolve(raw: RawConfig): TracerootPiConfig {
     debug: raw.debug ?? false,
     logFile: raw.logFile,
     captureFullPayload: raw.captureFullPayload ?? false,
+    captureContent: raw.captureContent ?? true,
     captureToolIo: raw.captureToolIo ?? true,
     showUiIndicator: raw.showUiIndicator ?? true,
     stateDir: raw.stateDir ?? join(homedir(), '.pi', 'agent', 'state', 'traceroot-pi-extension'),
@@ -314,13 +324,66 @@ export function collectEnvIssues(): ConfigIssue[] {
   return issues;
 }
 
-const BOOLEAN_CONFIG_FIELDS = [
+function isLoopbackEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+// The OTLP exporter connects directly — it does not honor HTTP(S)_PROXY/NO_PROXY. On a
+// proxy-only network every export then fails silently mid-session, so surface the
+// mismatch at startup. Loopback endpoints are exempt: a direct local connection is
+// exactly what the user wants there.
+export function collectProxyIssues(config: TracerootPiConfig): ConfigIssue[] {
+  if (!config.enabled || isLoopbackEndpoint(config.otlpEndpoint)) return [];
+  const proxyVar = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'].find(
+    (name) => (process.env[name] ?? '') !== '',
+  );
+  if (!proxyVar) return [];
+  return [
+    {
+      path: proxyVar,
+      message: `${proxyVar} is set, but the OTLP exporter connects directly (proxy variables are not honored); exports may fail on proxy-only networks`,
+      severity: 'warning',
+    },
+  ];
+}
+
+export const BOOLEAN_CONFIG_FIELDS = [
   'enabled',
   'localMode',
   'debug',
   'captureFullPayload',
+  'captureContent',
   'captureToolIo',
   'showUiIndicator',
+] as const;
+
+// Every string-typed RawConfig field. Like BOOLEAN_CONFIG_FIELDS, this drives
+// sanitizeFileConfig: without it a numeric "stateDir" reaches join() and throws at
+// extension load (outside the config try/catch — a host crash), and a numeric
+// "token" becomes a malformed "Bearer 123" header. A drift guard in config.test.ts
+// asserts every RawConfig field is covered by one of the two lists (or is
+// additionalMetadata).
+export const STRING_CONFIG_FIELDS = [
+  'token',
+  'apiUrl',
+  'otlpEndpoint',
+  'uiUrl',
+  'project',
+  'projectId',
+  'serviceName',
+  'environment',
+  'githubOwner',
+  'githubRepo',
+  'githubCommit',
+  'logFile',
+  'stateDir',
+  'parentSpanId',
+  'rootSpanId',
 ] as const;
 
 // File-sourced config (the global ~/.pi/agent/traceroot.json) is untrusted JSON: return a
@@ -340,6 +403,17 @@ export function sanitizeFileConfig(
       issues.push({
         path: `${sourcePath} (${field})`,
         message: `${field} must be true or false; ignored`,
+        severity: 'warning',
+      });
+      delete record[field];
+    }
+  }
+  for (const field of STRING_CONFIG_FIELDS) {
+    const value = record[field];
+    if (value !== undefined && typeof value !== 'string') {
+      issues.push({
+        path: `${sourcePath} (${field})`,
+        message: `${field} must be a string; ignored`,
         severity: 'warning',
       });
       delete record[field];
@@ -379,6 +453,7 @@ export function loadConfig(): ConfigBundle {
   configIssues.push(...globalIssues);
   configIssues.push(...collectEnvIssues());
   configIssues.push(...validateConfig(config));
+  configIssues.push(...collectProxyIssues(config));
 
   return { config, envProvided, configIssues };
 }
