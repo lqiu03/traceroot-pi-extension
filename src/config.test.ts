@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   BOOLEAN_CONFIG_FIELDS,
   BOOLEAN_ENV_KEYS,
   collectEnvIssues,
   collectProxyIssues,
   envRaw,
+  loadConfig,
+  readJsonConfigResult,
   resolve,
   sanitizeFileConfig,
   STRING_CONFIG_FIELDS,
@@ -55,7 +59,7 @@ test('envRaw reads only the variables that are set', () => {
     assert.equal(raw.localMode, true);
     assert.equal('project' in raw, false); // unset stays absent so lower layers win
   } finally {
-    process.env = saved;
+    restoreEnv(saved);
   }
 });
 
@@ -85,7 +89,7 @@ test('accepts SDK-standard env names, with legacy names as aliases', () => {
     process.env.TRACEROOT_API_KEY = 'sdk-wins';
     assert.equal(envRaw().token, 'sdk-wins');
   } finally {
-    process.env = saved;
+    restoreEnv(saved);
   }
 });
 
@@ -105,7 +109,113 @@ test('enabled accepts common truthy/falsey spellings; unrecognized values use th
       'an unrecognized value falls back to the default (false)',
     );
   } finally {
-    process.env = saved;
+    restoreEnv(saved);
+  }
+});
+
+test('whitespace-only env strings are treated as unset, not as a real value', () => {
+  const saved = { ...process.env };
+  try {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith('TRACEROOT_')) delete process.env[k];
+    }
+    process.env.TRACEROOT_ENABLED = 'true';
+    process.env.TRACEROOT_API_KEY = '   '; // whitespace-only — must not count as a token
+    const raw = envRaw();
+    assert.equal('token' in raw, false, 'a blank token is dropped, so lower layers/default win');
+    // …and the missing-token warning is NOT suppressed by the blank value.
+    assert.ok(
+      validateConfig(resolve(raw)).some((i) => i.path === 'token'),
+      'a blank token still triggers the missing-token warning',
+    );
+  } finally {
+    restoreEnv(saved);
+  }
+});
+
+test('env string values are trimmed (a token pasted with a trailing newline is cleaned)', () => {
+  const saved = { ...process.env };
+  try {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith('TRACEROOT_')) delete process.env[k];
+    }
+    process.env.TRACEROOT_API_KEY = '  sk-abc123\n';
+    process.env.TRACEROOT_PROJECT = ' my-project ';
+    const raw = envRaw();
+    assert.equal(
+      raw.token,
+      'sk-abc123',
+      'surrounding whitespace/newline is stripped from the token',
+    );
+    assert.equal(raw.project, 'my-project');
+  } finally {
+    restoreEnv(saved);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// readJsonConfigResult — distinguishing the ways a config file can fail to load
+// ---------------------------------------------------------------------------
+
+function withTempDir(fn: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-cfg-'));
+  try {
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('readJsonConfigResult reports missing / ok / invalid-json / not-object / unreadable distinctly', () => {
+  withTempDir((dir) => {
+    assert.equal(readJsonConfigResult(join(dir, 'nope.json')).kind, 'missing');
+
+    const ok = join(dir, 'ok.json');
+    writeFileSync(ok, '{"enabled":true}');
+    const okResult = readJsonConfigResult(ok);
+    assert.equal(okResult.kind, 'ok');
+    assert.deepEqual(okResult.kind === 'ok' ? okResult.config : null, { enabled: true });
+
+    const bad = join(dir, 'bad.json');
+    writeFileSync(bad, '{ not: valid json,');
+    assert.equal(readJsonConfigResult(bad).kind, 'invalid-json');
+
+    const arr = join(dir, 'arr.json');
+    writeFileSync(arr, '[1,2,3]'); // valid JSON, but not an object
+    assert.equal(readJsonConfigResult(arr).kind, 'not-object');
+
+    const scalar = join(dir, 'scalar.json');
+    writeFileSync(scalar, '42');
+    assert.equal(readJsonConfigResult(scalar).kind, 'not-object');
+
+    // A directory at the path is readable-as-a-path but not as a file: readFileSync
+    // throws a non-ENOENT error, which must map to 'unreadable', never 'missing'.
+    const asDir = join(dir, 'itsadir.json');
+    mkdirSync(asDir);
+    assert.equal(readJsonConfigResult(asDir).kind, 'unreadable');
+  });
+});
+
+test('loadConfig reports a non-object global file precisely, not as invalid JSON', () => {
+  // The bug: a global file that is valid JSON but not an object (e.g. an array) used to
+  // be reported as "not valid JSON", pointing the user at the wrong problem.
+  const saved = { ...process.env };
+  const dir = mkdtempSync(join(tmpdir(), 'tr-home-'));
+  try {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith('TRACEROOT_')) delete process.env[k];
+    }
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
+    mkdirSync(join(dir, '.pi', 'agent'), { recursive: true });
+    writeFileSync(join(dir, '.pi', 'agent', 'traceroot.json'), '["not","an","object"]');
+    const issue = loadConfig().configIssues.find((i) => i.path.endsWith('traceroot.json'));
+    assert.ok(issue, 'a problem with the global file is surfaced');
+    assert.match(issue.message, /must be a JSON object/);
+    assert.doesNotMatch(issue.message, /not valid JSON/, 'the misleading message is gone');
+  } finally {
+    restoreEnv(saved);
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -148,7 +258,7 @@ test('collectEnvIssues warns on a set-but-unrecognized boolean and on malformed 
       'non-object metadata is flagged',
     );
   } finally {
-    process.env = saved;
+    restoreEnv(saved);
   }
 });
 
@@ -185,7 +295,7 @@ test('collectEnvIssues is silent for recognized values, unset vars, and valid me
     process.env.TRACEROOT_ADDITIONAL_METADATA = '{"a":1}';
     assert.deepEqual(collectEnvIssues(), []);
   } finally {
-    process.env = saved;
+    restoreEnv(saved);
   }
 });
 
@@ -295,11 +405,15 @@ test('a proxy env var on an enabled cloud config produces a startup warning', ()
   });
 });
 
-test('lowercase https_proxy is detected too', () => {
+test('a lowercase proxy var is detected too', () => {
   withProxyEnv({ https_proxy: 'http://proxy.corp:8080' }, () => {
     const issues = collectProxyIssues(resolve({ enabled: true, token: 't' }));
     assert.equal(issues.length, 1);
-    assert.equal(issues[0]?.path, 'https_proxy');
+    // On case-insensitive platforms (Windows) `https_proxy` and `HTTPS_PROXY` are the
+    // SAME variable, so the reported name may be either casing — assert it is a
+    // recognized proxy var, not one exact spelling.
+    assert.match(issues[0]?.path ?? '', /^https?_proxy$/i);
+    assert.match(issues[0]?.message ?? '', /not honored/);
   });
 });
 

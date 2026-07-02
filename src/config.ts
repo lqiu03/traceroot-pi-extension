@@ -8,7 +8,7 @@
 // Project-local .pi/traceroot.json is applied separately and only when the
 // project is trusted (see project-config.ts), and only for presentation fields —
 // so an untrusted repo can never inject configuration or set the token/endpoint.
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -128,9 +128,17 @@ function boolEnv(name: string): boolean | undefined {
   return undefined;
 }
 
+// Trim env string values and treat a whitespace-only value as unset, mirroring how
+// boolEnv already normalizes. Without this, `TRACEROOT_API_KEY="   "` (or a token
+// pasted with a trailing newline) is taken as a real value: it bypasses the
+// missing-token warning and then rides into a malformed `Authorization: Bearer    `
+// header, so auth fails with no client-side signal. No string setting this extension
+// reads (token, URLs, project, ids) legitimately carries surrounding whitespace.
 function strEnv(name: string): string | undefined {
   const v = process.env[name];
-  return v === undefined || v === '' ? undefined : v;
+  if (v === undefined) return undefined;
+  const trimmed = v.trim();
+  return trimmed === '' ? undefined : trimmed;
 }
 
 // A non-null, non-array object — the shape required for a JSON config layer and for
@@ -197,14 +205,42 @@ export function envRaw(): RawConfig {
   });
 }
 
-export function readJsonConfig(file: string): RawConfig | null {
+// The distinct outcomes of trying to load a JSON config file, so callers can give a
+// precise diagnostic instead of collapsing "unreadable", "bad JSON", and "valid JSON
+// but not an object" into one misleading "not valid JSON" message.
+export type JsonConfigResult =
+  | { kind: 'ok'; config: RawConfig }
+  | { kind: 'missing' } // the file simply is not there — the common "no config" case
+  | { kind: 'unreadable' } // exists but could not be read (permissions, EISDIR, IO error)
+  | { kind: 'invalid-json' } // read succeeded but JSON.parse threw
+  | { kind: 'not-object' }; // parsed to a non-object (array/scalar); we only accept objects
+
+export function readJsonConfigResult(file: string): JsonConfigResult {
+  let text: string;
   try {
-    if (!existsSync(file)) return null;
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    return isPlainObject(parsed) ? (parsed as RawConfig) : null;
-  } catch {
-    return null;
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    // Distinguish "not there" from "there but unreadable" by errno, with no
+    // existsSync/readFileSync TOCTOU: a file deleted between the two calls would
+    // otherwise be misreported.
+    return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'unreadable' };
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { kind: 'invalid-json' };
+  }
+  return isPlainObject(parsed) ? { kind: 'ok', config: parsed } : { kind: 'not-object' };
+}
+
+// Back-compat convenience for callers that only care whether a usable object was read
+// (e.g. the project-local layer, which stays silent on any problem).
+export function readJsonConfig(file: string): RawConfig | null {
+  const result = readJsonConfigResult(file);
+  return result.kind === 'ok' ? result.config : null;
 }
 
 // Keep only primitive values; arbitrary metadata is emitted as span attributes,
@@ -430,9 +466,18 @@ export function sanitizeFileConfig(
   return { sanitized, issues };
 }
 
+// A precise, non-misleading message for each way the global config file can fail to
+// load. 'missing' and 'ok' produce no issue (handled by the caller).
+const GLOBAL_FILE_ISSUE: Record<Exclude<JsonConfigResult['kind'], 'ok' | 'missing'>, string> = {
+  unreadable: 'config file exists but could not be read (check permissions); ignored',
+  'invalid-json': 'config file is not valid JSON; ignored',
+  'not-object': 'config file must be a JSON object; ignored',
+};
+
 export function loadConfig(): ConfigBundle {
   const globalFile = join(homedir(), '.pi', 'agent', 'traceroot.json');
-  const rawGlobal = readJsonConfig(globalFile);
+  const globalResult = readJsonConfigResult(globalFile);
+  const rawGlobal = globalResult.kind === 'ok' ? globalResult.config : null;
   // Sanitize the untrusted global file before it is merged, dropping bad-typed fields.
   const { sanitized: globalLayer, issues: globalIssues } = rawGlobal
     ? sanitizeFileConfig(rawGlobal, globalFile)
@@ -443,10 +488,10 @@ export function loadConfig(): ConfigBundle {
   const envProvided = new Set(Object.keys(env) as Array<keyof TracerootPiConfig>);
 
   const configIssues: ConfigIssue[] = [];
-  if (rawGlobal === null && existsSync(globalFile)) {
+  if (globalResult.kind !== 'ok' && globalResult.kind !== 'missing') {
     configIssues.push({
       path: globalFile,
-      message: 'config file is not valid JSON; ignored',
+      message: GLOBAL_FILE_ISSUE[globalResult.kind],
       severity: 'warning',
     });
   }
