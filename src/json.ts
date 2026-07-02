@@ -39,21 +39,31 @@ export function boundedJsonHead(value: unknown, maxChars: number): string {
   if (maxChars <= 0) return '';
   if (typeof value === 'string') return safeJsonTruncate(value, maxChars);
   try {
-    if (Array.isArray(value)) {
-      let out = '[';
-      for (let i = 0; i < value.length; i++) {
-        if (i > 0) out += ',';
-        out += JSON.stringify(value[i]) ?? 'null'; // undefined/function elements are null, per JSON.stringify
-        if (out.length > maxChars) return safeSlice(out, maxChars) + ELLIPSIS;
-      }
-      out += ']';
-      return out.length > maxChars ? safeSlice(out, maxChars) + ELLIPSIS : out;
-    }
-    if (value && typeof value === 'object') {
-      // Objects with toJSON (Date, custom classes) must round-trip through the real
-      // serializer or the prefix would not match JSON.stringify's output.
-      if (typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+    if (value !== null && typeof value === 'object') {
+      // JSON.stringify calls toJSON on ANY object — arrays included — and unwraps boxed
+      // primitives (new Number / new String / new Boolean) to their primitive form. The
+      // manual array/object fast-paths below reproduce neither, so anything with a
+      // toJSON hook or a boxed-primitive identity must go through the real serializer
+      // first; otherwise the "byte-identical to JSON.stringify" guarantee breaks (and a
+      // redacting toJSON would be silently bypassed — a privacy concern). These are rare
+      // and small, so losing the early-exit here does not matter for the hot path.
+      if (
+        typeof (value as { toJSON?: unknown }).toJSON === 'function' ||
+        value instanceof Number ||
+        value instanceof String ||
+        value instanceof Boolean
+      ) {
         return safeJsonTruncate(value, maxChars);
+      }
+      if (Array.isArray(value)) {
+        let out = '[';
+        for (let i = 0; i < value.length; i++) {
+          if (i > 0) out += ',';
+          out += JSON.stringify(value[i]) ?? 'null'; // undefined/function elements are null, per JSON.stringify
+          if (out.length > maxChars) return safeSlice(out, maxChars) + ELLIPSIS;
+        }
+        out += ']';
+        return out.length > maxChars ? safeSlice(out, maxChars) + ELLIPSIS : out;
       }
       const record = value as Record<string, unknown>;
       let out = '{';
@@ -69,6 +79,7 @@ export function boundedJsonHead(value: unknown, maxChars: number): string {
       out += '}';
       return out.length > maxChars ? safeSlice(out, maxChars) + ELLIPSIS : out;
     }
+    // Primitives (number, boolean, null, undefined) — defer to the real serializer.
     return safeJsonTruncate(value, maxChars);
   } catch {
     return '[unserializable]';

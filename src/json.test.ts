@@ -127,6 +127,28 @@ test('boundedJsonHead honors toJSON on the top-level value', () => {
   assert.equal(boundedJsonHead(value, 1000), JSON.stringify(value));
 });
 
+test('boundedJsonHead unwraps boxed primitives like JSON.stringify does', () => {
+  // Boxed primitives are objects with no toJSON, so the manual object path would emit
+  // {} or {"0":"x"}; JSON.stringify unwraps them to their primitive form. Byte-identity
+  // requires routing them through the real serializer.
+  const cases: unknown[] = [new Number(1), new Boolean(false), new String('secret')];
+  for (const value of cases) {
+    assert.equal(boundedJsonHead(value, 1000), JSON.stringify(value), `boxed ${typeof value}`);
+  }
+  assert.equal(boundedJsonHead(new Number(1), 1000), '1');
+  assert.equal(boundedJsonHead(new String('x'), 1000), '"x"');
+  assert.equal(boundedJsonHead(new Boolean(false), 1000), 'false');
+});
+
+test('boundedJsonHead respects a custom toJSON on an array (redaction is not bypassed)', () => {
+  // JSON.stringify calls toJSON on arrays too. If the array fast-path ran first, a
+  // redacting toJSON would be silently ignored — the value would leak in full.
+  const redacted = [1, 2, 3] as number[] & { toJSON?: () => string };
+  redacted.toJSON = () => '[REDACTED]';
+  assert.equal(boundedJsonHead(redacted, 1000), JSON.stringify(redacted));
+  assert.equal(boundedJsonHead(redacted, 1000), '"[REDACTED]"');
+});
+
 test('boundedJsonHead returns empty string when maxChars is zero', () => {
   assert.equal(boundedJsonHead({ a: 1 }, 0), '');
 });
