@@ -1,11 +1,29 @@
 // P2-G — the /traceroot command: status | open | flush | disable | enable.
 // All UI output goes through ctx.ui.notify; spawning a browser is guarded by mode.
 import { spawn } from 'node:child_process';
+import { flushWithTimeout, type FlushOutcome } from './session.ts';
 import { beginNewSession } from '../state.ts';
 import { buildTraceUrl } from '../url.ts';
-import { setStatus, STATUS_ACTIVE, STATUS_INACTIVE } from '../ui.ts';
+import { clearWidget, setStatus, STATUS_ACTIVE, STATUS_INACTIVE } from '../ui.ts';
 import type { Runtime } from '../runtime.ts';
 import type { CommandContext } from '../types.ts';
+
+// The user-facing notification for each flush outcome. A timeout is the interesting
+// case: the user typically runs /traceroot flush precisely when the endpoint is
+// suspect, so the message must distinguish "hung" from "rejected".
+export function flushNotification(outcome: FlushOutcome): {
+  message: string;
+  level: 'info' | 'error';
+} {
+  if (outcome === 'flushed') return { message: 'Traceroot: flushed.', level: 'info' };
+  if (outcome === 'timeout') {
+    return {
+      message: 'Traceroot: flush timed out; the endpoint may be unreachable.',
+      level: 'error',
+    };
+  }
+  return { message: 'Traceroot: flush failed.', level: 'error' };
+}
 
 // Only hand the launcher a well-formed http(s) URL with no characters cmd.exe would
 // interpret as shell operators on the Windows `start` path. Defense in depth on top of
@@ -109,12 +127,11 @@ export function registerCommand(rt: Runtime): void {
             );
             return;
           }
-          try {
-            await provider.forceFlush();
-            ctx.ui.notify('Traceroot: flushed.', 'info');
-          } catch {
-            ctx.ui.notify('Traceroot: flush failed.', 'error');
-          }
+          // Bounded like every other flush site: an unbounded forceFlush against a hung
+          // endpoint wedges this command for the exporter's full internal deadline.
+          const outcome = await flushWithTimeout(provider);
+          const note = flushNotification(outcome);
+          ctx.ui.notify(note.message, note.level);
           return;
         }
         case 'disable': {
@@ -123,13 +140,16 @@ export function registerCommand(rt: Runtime): void {
           // same begin-fresh-session step session_start runs.
           beginNewSession(state, 'disabled');
           state.sessionDisabled = true;
-          setStatus(ctx, STATUS_INACTIVE);
+          setStatus(ctx, config, STATUS_INACTIVE);
+          // The trace-URL widget advertises a trace that will receive no more spans;
+          // leaving it up directly contradicts the "disabled" notice below.
+          clearWidget(ctx);
           ctx.ui.notify('Traceroot: tracing disabled for this session.', 'info');
           return;
         }
         case 'enable': {
           state.sessionDisabled = false;
-          setStatus(ctx, STATUS_ACTIVE);
+          setStatus(ctx, config, STATUS_ACTIVE);
           ctx.ui.notify('Traceroot: tracing enabled for this session.', 'info');
           return;
         }

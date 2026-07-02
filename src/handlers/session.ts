@@ -5,7 +5,7 @@ import { endSpan, setAttr } from '../attributes.ts';
 import { beginNewSession, closeAllOpenSpans } from '../state.ts';
 import { readSessionTrace } from '../fork-link.ts';
 import { isSpanId, isTraceId } from '../hex.ts';
-import { setStatus, STATUS_INACTIVE } from '../ui.ts';
+import { clearWidget, setStatus, STATUS_INACTIVE } from '../ui.ts';
 import type { Runtime } from '../runtime.ts';
 import type {
   ExtensionContext,
@@ -14,9 +14,13 @@ import type {
   SessionStartEvent,
 } from '../types.ts';
 
-const FLUSH_TIMEOUT_MS = 5000;
+export const FLUSH_TIMEOUT_MS = 5000;
+// Non-terminal session transitions (/new, reload, resume, fork) survive the process,
+// so a missed deadline only defers spans to the next batch — while the user is stuck
+// waiting. Keep that wait much shorter than the terminal-quit budget.
+const TRANSITION_FLUSH_TIMEOUT_MS = 1500;
 
-type FlushOutcome = 'flushed' | 'timeout' | 'error';
+export type FlushOutcome = 'flushed' | 'timeout' | 'error';
 
 // Race a promise against a non-blocking timeout. The timer is unref'd and always cleared,
 // so it never holds Node's event loop open (which would delay pi's exit by up to the
@@ -37,15 +41,26 @@ export async function raceWithTimeout<T>(work: Promise<T>, ms: number): Promise<
 }
 
 // Best-effort flush that reports its actual outcome, so a backend outage at session end
-// is logged honestly ('error'/'timeout') rather than as a misleading 'flushed'.
-async function flushWithTimeout(provider: {
-  forceFlush: () => Promise<void>;
-}): Promise<FlushOutcome> {
+// is logged honestly ('error'/'timeout') rather than as a misleading 'flushed'. Shared
+// with the /traceroot flush command, which must be bounded for the same reason.
+export async function flushWithTimeout(
+  provider: { forceFlush: () => Promise<void> },
+  ms: number = FLUSH_TIMEOUT_MS,
+): Promise<FlushOutcome> {
   const work = provider
     .forceFlush()
     .then((): FlushOutcome => 'flushed')
     .catch((): FlushOutcome => 'error');
-  return raceWithTimeout(work, FLUSH_TIMEOUT_MS);
+  return raceWithTimeout(work, ms);
+}
+
+// Surface genuine data loss even when debug logging is off, so a stock install
+// (no logFile, no debug) still learns its session-end spans may not have shipped.
+function reportFlushProblem(outcome: FlushOutcome): void {
+  if (outcome === 'flushed') return;
+  console.error(
+    `[@traceroot-ai/pi-extension] span flush ${outcome} at session end; some spans may not have been exported`,
+  );
 }
 
 export function registerSession(rt: Runtime): void {
@@ -96,37 +111,39 @@ export function registerSession(rt: Runtime): void {
 
   pi.on('session_shutdown', async (raw, ctx) => {
     const event = raw as SessionShutdownEvent;
-    setStatus(ctx as ExtensionContext, STATUS_INACTIVE);
-    // The last assistant response is the session's Output panel.
-    if (state.sessionSpan && state.lastAssistantText) {
-      setAttr(state.sessionSpan, 'traceroot.span.output', state.lastAssistantText);
-    }
-    closeAllOpenSpans(state, event?.reason ?? 'unknown');
+    setStatus(ctx as ExtensionContext, config, STATUS_INACTIVE);
+    // Drop the closed session's trace-URL widget; the next agent_start sets a fresh
+    // one. Without this the TUI keeps advertising a trace that is no longer live.
+    clearWidget(ctx as ExtensionContext);
+    // The last assistant response becomes the session's Output panel — written inside
+    // closeAllOpenSpans so every close path records it, not only this one.
+    closeAllOpenSpans(state, event?.reason ?? 'unknown', state.lastAssistantText);
 
-    // Always flush the just-closed spans. Only fully shut the provider down on a
-    // terminal quit: reload/new/resume/fork tear down THIS session while the process
-    // and the single shared provider live on, and an OTel provider returns no-op
-    // tracers after shutdown — shutting it down here would silently drop every span of
-    // the next session in a reused instance (the cubic provider-reuse regression).
-    const outcome = await flushWithTimeout(provider);
-    if (outcome !== 'flushed') {
-      // Surface genuine data loss even when debug logging is off, so a stock install
-      // (no logFile, no debug) still learns its session-end spans may not have shipped.
-      console.error(
-        `[@traceroot-ai/pi-extension] span flush ${outcome} at session end; some spans may not have been exported`,
-      );
-    }
-    if (event?.reason === 'quit') {
-      // The process is exiting; bound shutdown like flush so a hung exporter cannot
-      // stall pi's exit. shutdown() runs its own final flush internally.
-      await raceWithTimeout(
-        provider.shutdown().catch(() => undefined),
+    // Only fully shut the provider down on a terminal quit: reload/new/resume/fork
+    // tear down THIS session while the process and the single shared provider live
+    // on, and an OTel provider returns no-op tracers after shutdown — shutting it
+    // down here would silently drop every span of the next session in a reused
+    // instance (the cubic provider-reuse regression).
+    const reason = event?.reason ?? 'unknown';
+    if (reason === 'quit') {
+      // shutdown() runs its own final flush internally, so a separate forceFlush
+      // first would wait out the SAME hung batch twice. One bounded race; the
+      // exporter's per-request deadline sits inside it (see initTracing), so no
+      // socket outlives this and keeps pi's exit alive.
+      const outcome = await raceWithTimeout(
+        provider
+          .shutdown()
+          .then((): FlushOutcome => 'flushed')
+          .catch((): FlushOutcome => 'error'),
         FLUSH_TIMEOUT_MS,
       );
       state.providerShutdown = true;
+      reportFlushProblem(outcome);
       debug(`shutdown (quit); flush ${outcome}`);
     } else {
-      debug(`flush ${outcome} (session transition: ${event?.reason ?? 'unknown'})`);
+      const outcome = await flushWithTimeout(provider, TRANSITION_FLUSH_TIMEOUT_MS);
+      reportFlushProblem(outcome);
+      debug(`flush ${outcome} (session transition: ${reason})`);
     }
   });
 

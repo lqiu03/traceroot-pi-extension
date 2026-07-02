@@ -9,9 +9,16 @@ const WIDGET_KEY = 'traceroot';
 export const STATUS_ACTIVE = 'Traceroot ●';
 export const STATUS_INACTIVE = 'Traceroot ○';
 
-export function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
+// README documents TRACEROOT_SHOW_UI as controlling the status indicator AND the
+// trace-URL widget; both must honor it or opting out leaves a permanent "Traceroot ●"
+// in the status bar.
+export function setStatus(
+  ctx: ExtensionContext | undefined,
+  config: TracerootPiConfig,
+  text: string | undefined,
+): void {
   try {
-    if (ctx?.hasUI) ctx.ui.setStatus(STATUS_KEY, text);
+    if (ctx?.hasUI && config.showUiIndicator) ctx.ui.setStatus(STATUS_KEY, text);
   } catch {
     /* ui unavailable in this mode */
   }

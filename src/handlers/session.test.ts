@@ -82,6 +82,38 @@ test('providerShutdown is process-scoped and survives a new session', async () =
 // session_shutdown — provider lifecycle (flush always; shutdown only on quit)
 // ---------------------------------------------------------------------------
 
+test('session_shutdown clears the trace-URL widget', async () => {
+  // Without this the TUI keeps advertising the closed session's trace URL until the
+  // next agent_start happens to overwrite it.
+  const widgetCalls: Array<{ key: string; content: unknown }> = [];
+  const ctx = {
+    ...UI_CTX,
+    ui: {
+      setStatus() {},
+      notify() {},
+      setWidget: (key: string, content: unknown) => widgetCalls.push({ key, content }),
+    },
+  };
+  const { rt, handlers } = fakeRuntime();
+  registerSession(rt);
+  await fire(handlers, 'session_shutdown', { reason: 'reload' }, ctx);
+  assert.ok(
+    widgetCalls.some((call) => call.content === undefined),
+    'the trace widget is cleared on shutdown',
+  );
+});
+
+test('session_shutdown records the last assistant text as the session output', async () => {
+  const { rt, handlers, spans } = fakeRuntime();
+  registerSession(rt);
+  rt.state.sessionSpan = rt.tracer.startSpan('pi.session');
+  rt.state.lastAssistantText = 'closing answer';
+  await fire(handlers, 'session_shutdown', { reason: 'reload' }, UI_CTX);
+  assert.equal(spans[0]?.attrs['traceroot.span.output'], 'closing answer');
+  assert.equal(spans[0]?.attrs['traceroot.pi.shutdown_reason'], 'reload');
+  assert.equal(spans[0]?.ended, true);
+});
+
 test('a reload session_shutdown flushes but keeps the shared provider alive', async () => {
   const { rt, handlers, providerCalls } = fakeRuntime();
   registerSession(rt);
@@ -103,6 +135,17 @@ test('a quit session_shutdown shuts the provider down exactly once', async () =>
   assert.equal(rt.state.providerShutdown, true);
 });
 
+test('a quit session_shutdown does not run a separate forceFlush before shutdown', async () => {
+  // shutdown() runs its own final flush internally; a separate forceFlush first would
+  // wait out the SAME hung batch twice, doubling how long a dead endpoint can stall
+  // pi's exit. This pins the single-bounded-wait invariant of the quit path.
+  const { rt, handlers, providerCalls } = fakeRuntime();
+  registerSession(rt);
+  await fire(handlers, 'session_shutdown', { reason: 'quit' }, UI_CTX);
+  assert.equal(providerCalls.flush, 0, 'quit relies on shutdown()’s internal flush');
+  assert.equal(providerCalls.shutdown, 1);
+});
+
 test('a rejecting shutdown on quit still marks providerShutdown and does not throw', async () => {
   const { rt, handlers, providerCalls } = fakeRuntime();
   (rt.provider as unknown as { shutdown: () => Promise<void> }).shutdown = async () => {
@@ -115,7 +158,29 @@ test('a rejecting shutdown on quit still marks providerShutdown and does not thr
     true,
     'providerShutdown is set even when shutdown rejects',
   );
-  assert.equal(providerCalls.flush, 1, 'the flush still ran');
+  assert.equal(providerCalls.flush, 0, 'no separate forceFlush runs on the quit path');
+});
+
+test('a rejecting shutdown on quit is reported on stderr as data loss', async () => {
+  const { rt, handlers } = fakeRuntime();
+  (rt.provider as unknown as { shutdown: () => Promise<void> }).shutdown = async () => {
+    throw new Error('backend down');
+  };
+  registerSession(rt);
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map(String).join(' '));
+  };
+  try {
+    await fire(handlers, 'session_shutdown', { reason: 'quit' }, UI_CTX);
+  } finally {
+    console.error = original;
+  }
+  assert.ok(
+    errors.some((line) => line.includes('span flush error')),
+    'a failed final flush on quit is surfaced even with debug logging off',
+  );
 });
 
 test('session_shutdown logs the real flush outcome instead of a blanket "flushed"', async () => {

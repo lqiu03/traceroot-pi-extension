@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { browserLaunch, isLaunchableUrl, registerCommand } from './command.ts';
-import { commandRuntime } from '../test-support.ts';
+import { browserLaunch, flushNotification, isLaunchableUrl, registerCommand } from './command.ts';
+import { commandRuntime, recordingTracer } from '../test-support.ts';
 
 const URL = 'https://app.traceroot.ai/trace/abc?traceId=deadbeef';
 
@@ -76,6 +76,20 @@ test('/traceroot flush reports a failure when the provider flush rejects', async
   );
 });
 
+test('flushNotification distinguishes timeout from rejection', () => {
+  // /traceroot flush is typically run when the endpoint is already suspect, so a
+  // hung flush ("timed out", endpoint unreachable) must read differently from a
+  // rejected one ("failed"). Both are errors; success is info.
+  assert.deepEqual(flushNotification('flushed'), { message: 'Traceroot: flushed.', level: 'info' });
+  const timeout = flushNotification('timeout');
+  assert.equal(timeout.level, 'error');
+  assert.match(timeout.message, /timed out/i);
+  const error = flushNotification('error');
+  assert.equal(error.level, 'error');
+  assert.match(error.message, /failed/i);
+  assert.notEqual(timeout.message, error.message, 'the two failure modes are distinguishable');
+});
+
 test('/traceroot disable then enable toggles sessionDisabled', async () => {
   const { rt, run } = commandRuntime();
   registerCommand(rt);
@@ -83,6 +97,32 @@ test('/traceroot disable then enable toggles sessionDisabled', async () => {
   assert.equal(rt.state.sessionDisabled, true, 'disable turns tracing off for the session');
   await run('enable');
   assert.equal(rt.state.sessionDisabled, false, 'enable turns it back on');
+});
+
+test('/traceroot disable clears the trace-URL widget', async () => {
+  // A widget advertising the disabled session's trace URL directly contradicts the
+  // "tracing disabled" notice next to it.
+  const { rt, run, widgetCalls } = commandRuntime();
+  registerCommand(rt);
+  await run('disable');
+  assert.ok(
+    widgetCalls.some((call) => call.content === undefined),
+    'the trace widget is cleared on disable',
+  );
+});
+
+test('/traceroot disable records the session output before closing the span', async () => {
+  // README: "the last assistant response its Output". Only the session_shutdown path
+  // used to write it; a session ended via disable lost its Output panel even though
+  // the text was sitting in state.
+  const { rt, run } = commandRuntime();
+  const { tracer, spans } = recordingTracer();
+  rt.state.sessionSpan = tracer.startSpan('pi.session');
+  rt.state.lastAssistantText = 'the last answer';
+  registerCommand(rt);
+  await run('disable');
+  assert.equal(spans[0]?.ended, true, 'the session span is closed');
+  assert.equal(spans[0]?.attrs['traceroot.span.output'], 'the last answer');
 });
 
 test('/traceroot status reports config and session state', async () => {

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ROOT_CONTEXT } from '@opentelemetry/api';
 import { registerTurn } from './turn.ts';
 import { repoSlug } from '../attribution.ts';
@@ -93,6 +95,96 @@ test('agent_start attaches the repo slug to the session span asynchronously', as
 });
 
 // ---------------------------------------------------------------------------
+// Content gating and capping on the session/turn Input–Output panels
+// ---------------------------------------------------------------------------
+
+test('captureContent=false keeps prompt and response text off session and turn spans', async () => {
+  const { rt, handlers, spans } = fakeRuntime({ captureContent: false });
+  registerTurn(rt);
+  await fire(handlers, 'before_agent_start', { prompt: 'proprietary prompt text' });
+  await fire(handlers, 'agent_start', {}, UI_CTX);
+  await fire(handlers, 'agent_end', {
+    messages: [{ role: 'assistant', content: 'proprietary answer text' }],
+  });
+  const [session, turn] = spans;
+  assert.equal(session?.attrs['traceroot.span.input'], undefined, 'session input suppressed');
+  assert.equal(turn?.attrs['traceroot.span.input'], undefined, 'turn input suppressed');
+  assert.equal(turn?.attrs['traceroot.span.output'], undefined, 'turn output suppressed');
+  assert.equal(turn?.attrs['traceroot.pi.turn_index'], 0, 'metadata is still recorded');
+});
+
+test('the turn prompt is capped like every other input surface', async () => {
+  // A pasted multi-MB log must not ride the span through the batch queue whole; this
+  // was the only Input surface without an IO_LIMITS cap.
+  const { rt, handlers, spans } = fakeRuntime();
+  registerTurn(rt);
+  await fire(handlers, 'before_agent_start', { prompt: 'x'.repeat(100_000) });
+  await fire(handlers, 'agent_start', {}, UI_CTX);
+  const turnInput = String(spans[1]?.attrs['traceroot.span.input'] ?? '');
+  const sessionInput = String(spans[0]?.attrs['traceroot.span.input'] ?? '');
+  assert.ok(
+    turnInput.length > 0 && turnInput.length <= 4097,
+    `turn input capped (${turnInput.length})`,
+  );
+  assert.ok(sessionInput.length <= 4097, `session input capped (${sessionInput.length})`);
+});
+
+test('TRACEROOT_SHOW_UI=false suppresses the status indicator, not just the widget', async () => {
+  const statusCalls: string[] = [];
+  const recordingCtx = {
+    ...UI_CTX,
+    ui: {
+      setStatus: (_key: string, text: string | undefined) => statusCalls.push(String(text)),
+      setWidget() {},
+      notify() {},
+    },
+  };
+  const off = fakeRuntime({ showUiIndicator: false });
+  registerTurn(off.rt);
+  await fire(off.handlers, 'agent_start', {}, recordingCtx);
+  assert.deepEqual(statusCalls, [], 'no status entry when the UI indicator is opted out');
+
+  const on = fakeRuntime({ showUiIndicator: true });
+  registerTurn(on.rt);
+  await fire(on.handlers, 'agent_start', {}, recordingCtx);
+  assert.ok(statusCalls.length > 0, 'status entry appears when opted in (default)');
+});
+
+// ---------------------------------------------------------------------------
+// agent_start — the effective project reaches exported spans
+// ---------------------------------------------------------------------------
+
+test('a trusted project-local traceroot.json project override reaches the session span', async () => {
+  // The provider Resource bakes in the load-time project; the project-local file is
+  // only applied at first agent_start. The span-level traceroot.project stamp is what
+  // makes the documented override actually land in TraceRoot.
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), JSON.stringify({ project: 'repo-project' }));
+    const { rt, handlers, spans } = fakeRuntime({ project: 'global-default' });
+    registerTurn(rt);
+    await fire(handlers, 'agent_start', {}, { ...UI_CTX, cwd: dir, isProjectTrusted: () => true });
+    assert.equal(spans[0]?.name, 'pi.session');
+    assert.equal(
+      spans[0]?.attrs['traceroot.project'],
+      'repo-project',
+      'the session span carries the project-local override, not the load-time default',
+    );
+  });
+});
+
+test('an untrusted project cannot override the project label', async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), JSON.stringify({ project: 'evil' }));
+    const { rt, handlers, spans } = fakeRuntime({ project: 'global-default' });
+    registerTurn(rt);
+    await fire(handlers, 'agent_start', {}, { ...UI_CTX, cwd: dir, isProjectTrusted: () => false });
+    assert.equal(spans[0]?.attrs['traceroot.project'], 'global-default');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // agent_end — closes the turn span, advances the counter, sweeps leftovers
 // ---------------------------------------------------------------------------
 
@@ -126,4 +218,39 @@ test('a re-entrant agent_start closes the prior turn span before opening a new o
   await fire(handlers, 'agent_start', {}, UI_CTX); // a second loop without an intervening agent_end
   assert.equal(firstTurn?.ended, true, 'the prior turn span is swept closed');
   assert.equal(spans[2]?.name, 'pi.turn', 'a fresh turn span is opened');
+  // The defensive close means the previous loop was aborted: mark it and consume its
+  // index, or two turns in one trace export the same turn_index.
+  assert.equal(firstTurn?.attrs['traceroot.pi.turn_incomplete'], true);
+  assert.notEqual(
+    spans[2]?.attrs['traceroot.pi.turn_index'],
+    firstTurn?.attrs['traceroot.pi.turn_index'],
+    'the aborted turn’s index is not reused',
+  );
+});
+
+test('a set-but-malformed env parent pair is diagnosed instead of silently ignored', async () => {
+  const { rt, handlers } = fakeRuntime({
+    rootSpanId: 'deadbeef', // 8 hex — not a 32-hex trace id
+    parentSpanId: 'a'.repeat(16),
+  });
+  const debugLines: string[] = [];
+  rt.debug = (...args: unknown[]) => debugLines.push(args.map(String).join(' '));
+  registerTurn(rt);
+  await fire(handlers, 'agent_start', {}, UI_CTX);
+  assert.ok(
+    debugLines.some((line) => line.includes('rejected')),
+    'subagent nesting silently degrading to a fresh root is the bug; the log line is the fix',
+  );
+});
+
+test('a well-formed env parent pair produces no rejection diagnostic', async () => {
+  const { rt, handlers } = fakeRuntime({
+    rootSpanId: 'c'.repeat(32),
+    parentSpanId: 'a'.repeat(16),
+  });
+  const debugLines: string[] = [];
+  rt.debug = (...args: unknown[]) => debugLines.push(args.map(String).join(' '));
+  registerTurn(rt);
+  await fire(handlers, 'agent_start', {}, UI_CTX);
+  assert.ok(!debugLines.some((line) => line.includes('rejected')));
 });

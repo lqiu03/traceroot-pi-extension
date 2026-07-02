@@ -92,9 +92,18 @@ function openSessionSpan(
   // Parent context: a reload/resume continuation first, else an env-provided
   // remote parent (subagent nesting). Either keeps this session in an existing
   // trace; otherwise startSpan with no parent begins a fresh root.
+  const envParentCtx = remoteParentContext(config.rootSpanId, config.parentSpanId);
+  if (!envParentCtx && (config.rootSpanId || config.parentSpanId)) {
+    // The subagent-nesting feature failing validation must not be silent: the parent
+    // process set the env pair expecting a nested trace, and without this line every
+    // child session quietly becomes a fresh root with nothing to explain why.
+    debug(
+      'PI_ROOT_SPAN_ID/PI_PARENT_SPAN_ID set but rejected (need 32-hex trace id + 16-hex span id); starting a fresh root',
+    );
+  }
   const parentCtx: Context | undefined =
     (state.resumeFrom && remoteParentContext(state.resumeFrom.traceId, state.resumeFrom.spanId)) ??
-    remoteParentContext(config.rootSpanId, config.parentSpanId);
+    envParentCtx;
   const sessionSpan = tracer.startSpan(
     'pi.session',
     { kind: SpanKind.INTERNAL, links: sessionLinks(rt) },
@@ -102,7 +111,23 @@ function openSessionSpan(
   );
   const cwd = ctx?.cwd ?? process.cwd();
   setAttr(sessionSpan, 'traceroot.pi.start_reason', state.sessionStartReason ?? 'startup');
-  if (firstPrompt) setAttr(sessionSpan, 'traceroot.span.input', firstPrompt);
+  // The provider Resource baked in the project known at extension LOAD, but a trusted
+  // repo's .pi/traceroot.json is only applied at the first agent_start (which runs
+  // finalizeProjectConfig before this). Stamp the effective project on the session
+  // span so the documented project-local override actually reaches exported spans;
+  // the span attribute supersedes the stale resource attribute downstream.
+  setAttr(sessionSpan, 'traceroot.project', config.project);
+  // Prompt text is conversation content: gate it (captureContent is the one switch
+  // that keeps typed text on-machine) and cap it — a pasted multi-MB log would
+  // otherwise ride the span through the batch queue and the OTLP payload uncapped,
+  // the only input surface without a limit.
+  if (firstPrompt && config.captureContent) {
+    setAttr(
+      sessionSpan,
+      'traceroot.span.input',
+      safeJsonTruncate(firstPrompt, IO_LIMITS.turnInput),
+    );
+  }
   setAttr(sessionSpan, 'traceroot.pi.cwd', cwd);
   const attributes = sessionAttributes(cwd);
   for (const key of Object.keys(attributes)) {
@@ -155,7 +180,9 @@ export function registerTurn(rt: Runtime): void {
       streamingBehavior:
         typeof event?.streamingBehavior === 'string' ? event.streamingBehavior : undefined,
       imageCount: Array.isArray(event?.images) ? event.images.length : undefined,
-      raw: typeof event?.text === 'string' ? event.text : undefined,
+      // Gate at capture time, not just at apply time: with the flag off a large pasted
+      // input would otherwise sit in memory until the next agent_start for no purpose.
+      raw: config.captureFullPayload && typeof event?.text === 'string' ? event.text : undefined,
     };
   });
 
@@ -171,15 +198,19 @@ export function registerTurn(rt: Runtime): void {
     if (!state.sessionSpan) openSessionSpan(rt, ctx, prompt);
 
     // Defensive: a previous agent loop that never emitted agent_end would leave
-    // turn-scoped spans open. Close them before starting a new loop.
+    // turn-scoped spans open. Close them before starting a new loop, marked
+    // incomplete (this close means the loop was aborted), and consume the aborted
+    // turn's index so the next turn does not export a duplicate turn_index.
     if (state.turnSpan) {
       sweepTurnScoped(state);
+      setAttr(state.turnSpan, 'traceroot.pi.turn_incomplete', true);
       endSpan(state.turnSpan);
       state.turnSpan = null;
       state.turnCtx = null;
+      state.promptIndex += 1;
     }
 
-    setStatus(ctx, STATUS_ACTIVE);
+    setStatus(ctx, config, STATUS_ACTIVE);
     surfaceConfigIssue(rt, ctx);
     const url = buildTraceUrl(config, state.sessionTraceId);
     setTraceWidget(ctx, config, url, state.sessionTraceId);
@@ -190,8 +221,11 @@ export function registerTurn(rt: Runtime): void {
       state.sessionCtx ?? undefined,
     );
     setAttr(turnSpan, 'traceroot.pi.turn_index', state.promptIndex);
-    // The user prompt is the turn's Input panel.
-    if (prompt) setAttr(turnSpan, 'traceroot.span.input', prompt);
+    // The user prompt is the turn's Input panel — content-gated and capped like the
+    // session's first prompt above.
+    if (prompt && config.captureContent) {
+      setAttr(turnSpan, 'traceroot.span.input', safeJsonTruncate(prompt, IO_LIMITS.turnInput));
+    }
     applyPendingInput(turnSpan, state, config);
     state.turnSpan = turnSpan;
     state.turnCtx = trace.setSpan(context.active(), turnSpan);
@@ -208,11 +242,11 @@ export function registerTurn(rt: Runtime): void {
     state.turnSpan = null;
     state.turnCtx = null;
     state.promptIndex += 1;
-    // The final assistant message is the turn's Output panel.
-    const output = lastAssistantText(
-      (raw as { messages?: unknown })?.messages,
-      IO_LIMITS.turnOutput,
-    );
+    // The final assistant message is the turn's Output panel (conversation content —
+    // gated with the other Input/Output surfaces).
+    const output = config.captureContent
+      ? lastAssistantText((raw as { messages?: unknown })?.messages, IO_LIMITS.turnOutput)
+      : '';
     if (output) setAttr(turnSpan, 'traceroot.span.output', output);
     endSpan(turnSpan);
     rt.debug('closed turn span');
