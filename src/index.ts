@@ -6,10 +6,11 @@
 // extension returns quietly — pi must never crash because tracing failed.
 import { join } from 'node:path';
 import { loadConfig } from './config.ts';
+import { safeJsonTruncate } from './json.ts';
 import { createFileLogger } from './logger.ts';
 import { initTracing } from './provider.ts';
-import { createSpanState } from './state.ts';
-import { registerSession } from './handlers/session.ts';
+import { closeAllOpenSpans, createSpanState } from './state.ts';
+import { FLUSH_TIMEOUT_MS, raceWithTimeout, registerSession } from './handlers/session.ts';
 import { registerTurn } from './handlers/turn.ts';
 import { registerLlm } from './handlers/llm.ts';
 import { registerTool } from './handlers/tool.ts';
@@ -32,6 +33,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   }
 
   const { config, envProvided, configIssues } = bundle;
+
+  // Report config problems BEFORE the enabled gate: the most common misconfiguration
+  // (TRACEROOT_ENABLED=ture, or a malformed config file) resolves to enabled=false,
+  // and returning first would skip exactly the warnings that diagnose it.
+  const issueText = (issue: (typeof configIssues)[number]) =>
+    `config ${issue.path}: ${issue.message}`;
+  for (const issue of configIssues) {
+    warn(issueText(issue));
+  }
+
   if (!config.enabled) return; // opt-in: no listeners registered when disabled
 
   const logFile =
@@ -40,14 +51,22 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const fileLogger = createFileLogger(logFile);
 
   for (const issue of configIssues) {
-    const text = `config ${issue.path}: ${issue.message}`;
-    warn(text);
-    fileLogger.log(issue.severity, text);
+    fileLogger.log(issue.severity, issueText(issue));
   }
 
   let tracing;
   try {
-    tracing = initTracing(config);
+    // Route OTel diag output (export failures, queue-full drops) to the user's chosen
+    // diagnostic sinks. Without a registered diag logger those failures are invisible
+    // for the whole session; a stock install (no debug, no log file) stays quiet.
+    const diagSink =
+      config.debug || logFile
+        ? (level: 'error' | 'warning', message: string) => {
+            if (config.debug) warn(`otel ${level}: ${message}`);
+            fileLogger.log(level, `otel: ${message}`);
+          }
+        : undefined;
+    tracing = initTracing(config, diagSink);
   } catch (err) {
     warn('failed to initialize tracing; tracing disabled', err);
     return;
@@ -63,8 +82,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     provider: tracing.provider,
     state,
     debug: (...args: unknown[]) => {
-      if (config.debug) console.error('[traceroot]', ...args);
-      fileLogger.log('debug', args.map((a) => (typeof a === 'string' ? a : String(a))).join(' '));
+      // Hot path: called on every traced event. With no sink at all, skip even the
+      // formatting allocations. config.debug is read live so a project-local
+      // `debug: true` still enables stderr mid-session.
+      if (!config.debug && !logFile) return;
+      // JSON-render non-strings: String(obj) logs "[object Object]", which records
+      // THAT something happened but destroys the WHY the log exists to capture.
+      const line = args
+        .map((a) => (typeof a === 'string' ? a : safeJsonTruncate(a, 256)))
+        .join(' ');
+      if (config.debug) console.error('[traceroot]', line);
+      fileLogger.log('debug', line);
     },
   };
 
@@ -78,6 +106,28 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     warn('failed to register handlers', err);
     return;
   }
+
+  // Fallback flush for exits that never emit session_shutdown (e.g. the host bailing
+  // out after an unhandled error). beforeExit only fires when the event loop drains,
+  // never mid-session; a normal quit already shut the provider down, making this a
+  // no-op. process.exit() and signals still bypass it — a documented residual gap.
+  process.once('beforeExit', () => {
+    // A throw here would surface as an uncaughtException in the host, so the whole
+    // handler is guarded.
+    try {
+      if (state.providerShutdown) return;
+      state.providerShutdown = true;
+      closeAllOpenSpans(state, 'process-exit');
+      // The pending shutdown keeps the loop alive until it settles; the exporter's
+      // request deadline and this race both bound that, so exit cannot hang.
+      void raceWithTimeout(
+        tracing.provider.shutdown().catch(() => undefined),
+        FLUSH_TIMEOUT_MS,
+      );
+    } catch {
+      /* best-effort: a fallback flush must never crash the exiting host */
+    }
+  });
 
   rt.debug('registered; endpoint=', config.otlpEndpoint, 'project=', config.project);
 }
