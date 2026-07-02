@@ -27,6 +27,19 @@ function fakeProvider(): {
   return { provider, providerCalls };
 }
 
+// Restore process.env to a snapshot IN PLACE. Never `process.env = saved`: assigning
+// replaces the magic env proxy with a plain object, silently detaching later
+// process.env writes from the real OS environment — which os.homedir() (libuv) reads.
+// Every test after such a replacement sees homedir() ignore its HOME/USERPROFILE pin.
+export function restoreEnv(saved: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in saved)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(saved)) {
+    if (value !== undefined) process.env[key] = value;
+  }
+}
+
 // Run `fn` against a throwaway temp directory, always cleaning it up afterwards.
 export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'tr-test-'));
@@ -105,11 +118,16 @@ export function fakeRuntime(config: Partial<TracerootPiConfig> = {}) {
     state: createSpanState(),
     config: {
       captureFullPayload: false,
+      captureContent: true,
       captureToolIo: true,
+      showUiIndicator: true,
       stateDir: '/tmp/pi-review-test',
       ...config,
     },
-    envProvided: {},
+    // A real Set: the declared type is Set<keyof TracerootPiConfig>, and the previous
+    // `{}` placeholder made envProvided.has() throw inside finalizeProjectConfig's bare
+    // catch — any test through the project-local merge would have passed vacuously.
+    envProvided: new Set<keyof TracerootPiConfig>(),
     configIssues: [],
     provider,
     tracer,
@@ -151,6 +169,7 @@ export function firstSpan(spans: SpanRecord[]): SpanRecord {
 export function commandRuntime(stateOverrides: Partial<SpanState> = {}) {
   let commandHandler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
   const notifications: Array<{ message: string; level?: string }> = [];
+  const widgetCalls: Array<{ key: string; content: unknown }> = [];
   const { provider, providerCalls } = fakeProvider();
   const rt = {
     pi: {
@@ -168,6 +187,8 @@ export function commandRuntime(stateOverrides: Partial<SpanState> = {}) {
       otlpEndpoint: 'http://localhost:8000',
       enabled: true,
       uiUrl: 'http://localhost:3000',
+      captureContent: true,
+      showUiIndicator: true,
     },
     provider,
     debug: () => {},
@@ -177,13 +198,21 @@ export function commandRuntime(stateOverrides: Partial<SpanState> = {}) {
     ui: {
       notify: (message: string, level?: string) => notifications.push({ message, level }),
       setStatus() {},
-      setWidget() {},
+      setWidget: (key: string, content: unknown) => widgetCalls.push({ key, content }),
     },
     mode: 'tui',
+    hasUI: true,
   };
   const run = async (args: string) => {
     if (!commandHandler) throw new Error('command handler not registered');
     await commandHandler(args, ctx);
   };
-  return { rt, run, notifications, providerCalls, registered: () => commandHandler !== undefined };
+  return {
+    rt,
+    run,
+    notifications,
+    widgetCalls,
+    providerCalls,
+    registered: () => commandHandler !== undefined,
+  };
 }
