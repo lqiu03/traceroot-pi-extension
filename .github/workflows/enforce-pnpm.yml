@@ -1,0 +1,20 @@
+name: Enforce pnpm
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+
+jobs:
+  reject-npm-lockfiles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject npm and yarn lockfiles
+        run: |
+          if git ls-files | grep -E '(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock)$'; then
+            echo "This repo is pnpm-only; remove npm/yarn lockfiles."
+            exit 1
+          fi

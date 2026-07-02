@@ -1,0 +1,41 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version sync, typecheck, and tests
+        run: pnpm check
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Smoke-load the extension entry point
+        run: node --input-type=module -e "await import('./src/index.ts')"
+
+      - name: Verify packaged contents
+        run: pnpm publish --dry-run --no-git-checks
