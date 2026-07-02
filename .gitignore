@@ -5,8 +5,8 @@ node_modules/
 .env.local
 dist/
 
-# pnpm-only: the workspace root holds the single pnpm-lock.yaml. A package-level
-# npm/yarn lockfile is dead weight pnpm ignores and silently drifts from package.json.
+# pnpm-only: pnpm-lock.yaml is the single source of truth. npm/yarn lockfiles
+# are dead weight pnpm ignores and silently drift from package.json.
 package-lock.json
 npm-shrinkwrap.json
 yarn.lock
