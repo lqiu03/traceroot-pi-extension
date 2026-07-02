@@ -164,3 +164,27 @@ test('an enabled install registers handlers and a beforeExit fallback flush', as
     },
   );
 });
+
+test('re-initializing in the same process does not accumulate beforeExit listeners', async () => {
+  // A host reload calls the factory again; without removing the prior listener each
+  // init would add another, climbing toward Node's MaxListenersExceededWarning.
+  await withIsolatedEnv(
+    { TRACEROOT_ENABLED: 'true', TRACEROOT_API_KEY: 't', TRACEROOT_LOCAL_MODE: 'true' },
+    async () => {
+      const before = process.listeners('beforeExit');
+      const netAdded = () => process.listeners('beforeExit').filter((l) => !before.includes(l));
+      try {
+        await entry(fakePi().pi);
+        await entry(fakePi().pi);
+        await entry(fakePi().pi);
+        assert.equal(
+          netAdded().length,
+          1,
+          'three inits leave exactly one fallback listener, not three',
+        );
+      } finally {
+        for (const l of netAdded()) process.removeListener('beforeExit', l);
+      }
+    },
+  );
+});

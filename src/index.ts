@@ -23,6 +23,14 @@ function warn(message: string, err?: unknown): void {
   console.error(`[@traceroot-ai/pi-extension] ${message}${detail}`);
 }
 
+// The single beforeExit fallback listener currently registered. If the host
+// re-initializes the extension in the same process (a reload), registering a new
+// listener each time would stack them toward Node's MaxListenersExceededWarning. We
+// keep exactly one, removing the prior before adding a fresh listener bound to the
+// CURRENT state/provider — a module-level "register once" flag would instead leave the
+// stale first init's provider as the flush target.
+let activeExitListener: (() => void) | undefined;
+
 export default async function (pi: ExtensionAPI): Promise<void> {
   let bundle;
   try {
@@ -111,7 +119,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   // out after an unhandled error). beforeExit only fires when the event loop drains,
   // never mid-session; a normal quit already shut the provider down, making this a
   // no-op. process.exit() and signals still bypass it — a documented residual gap.
-  process.once('beforeExit', () => {
+  if (activeExitListener) process.removeListener('beforeExit', activeExitListener);
+  const onBeforeExit = (): void => {
     // A throw here would surface as an uncaughtException in the host, so the whole
     // handler is guarded.
     try {
@@ -127,7 +136,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     } catch {
       /* best-effort: a fallback flush must never crash the exiting host */
     }
-  });
+  };
+  activeExitListener = onBeforeExit;
+  process.once('beforeExit', onBeforeExit);
 
   rt.debug('registered; endpoint=', config.otlpEndpoint, 'project=', config.project);
 }
