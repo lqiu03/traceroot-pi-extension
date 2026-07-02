@@ -12,6 +12,14 @@
     "tracing"
   ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/traceroot-ai/traceroot-pi-extension.git"
+  },
+  "homepage": "https://traceroot.ai",
+  "bugs": {
+    "url": "https://github.com/traceroot-ai/traceroot-pi-extension/issues"
+  },
   "type": "module",
   "files": [
     "src",
@@ -49,5 +57,6 @@
   },
   "engines": {
     "node": ">=22.19.0"
-  }
+  },
+  "packageManager": "pnpm@10.14.0"
 }
