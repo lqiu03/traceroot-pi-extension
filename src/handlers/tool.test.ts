@@ -64,6 +64,22 @@ test('tool_execution_end without a matching start is a no-op', async () => {
   assert.equal(rt.state.toolSpans.size, 0);
 });
 
+test('tool_execution_start with no open session/turn context does not emit an orphan root', async () => {
+  // activeParentCtx documents "returns undefined when nothing is open (caller skips
+  // the span)". llm.ts honors it; a tool span started anyway would export a detached
+  // single-span root trace (e.g. between /traceroot enable and the next prompt).
+  const { rt, handlers, spans } = fakeRuntime();
+  rt.state.sessionCtx = null; // no session span open yet
+  registerTool(rt);
+  await fire(handlers, 'tool_execution_start', {
+    toolCallId: 'a',
+    toolName: 'bash',
+    args: { command: 'ls' },
+  });
+  assert.equal(spans.length, 0, 'no orphan root span');
+  assert.equal(rt.state.toolSpans.size, 0, 'nothing tracked for the skipped call');
+});
+
 test('tool_execution_start is skipped while the session is disabled', async () => {
   const { rt, handlers, spans } = fakeRuntime();
   registerTool(rt);
@@ -140,6 +156,40 @@ test('tool argument and result bodies are captured by default and omitted when c
   assert.equal(span.attrs['gen_ai.tool.call.arguments'], undefined, 'args body suppressed');
   assert.equal(span.attrs['gen_ai.tool.call.result'], undefined, 'result body suppressed');
   assert.equal(span.attrs['gen_ai.tool.name'], 'bash', 'tool name still recorded');
+});
+
+test('the descriptive span-name suffix respects the captureToolIo gate', async () => {
+  // Span NAMES are always exported, so with capture off the first 60 chars of every
+  // shell command (enough for a pasted Authorization header) must not ride along in
+  // the name after the user explicitly opted out of tool content.
+  const off = fakeRuntime({ captureToolIo: false });
+  registerTool(off.rt);
+  await fire(off.handlers, 'tool_execution_start', {
+    toolCallId: 'a',
+    toolName: 'bash',
+    args: { command: 'curl -H "Authorization: Bearer sk-secret-token"' },
+  });
+  assert.equal(firstSpan(off.spans).name, 'bash', 'bare tool name only');
+
+  const on = fakeRuntime({ captureToolIo: true });
+  registerTool(on.rt);
+  await fire(on.handlers, 'tool_execution_start', {
+    toolCallId: 'a',
+    toolName: 'bash',
+    args: { command: 'npm test' },
+  });
+  assert.equal(firstSpan(on.spans).name, 'bash: npm test', 'descriptive name when opted in');
+});
+
+test('file-path span-name suffixes are gated too', async () => {
+  const off = fakeRuntime({ captureToolIo: false });
+  registerTool(off.rt);
+  await fire(off.handlers, 'tool_execution_start', {
+    toolCallId: 'a',
+    toolName: 'read',
+    args: { path: '/home/user/customer-contract-acme.pdf' },
+  });
+  assert.equal(firstSpan(off.spans).name, 'read');
 });
 
 // ---------------------------------------------------------------------------

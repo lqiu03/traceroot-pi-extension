@@ -39,10 +39,23 @@ export function registerTool(rt: Runtime): void {
     if (state.toolSpans.has(toolCallId)) return; // never double-open the same call
 
     const toolName = event?.toolName ?? 'unknown';
+    // No open session/turn/LLM span means agent_start has not (re)opened the session
+    // yet — starting a span with an undefined parent would emit a detached single-span
+    // root trace. Skip, honoring activeParentCtx's "caller skips" contract the same
+    // way llm.ts does for turn_start.
+    const parentCtx = activeParentCtx(state);
+    if (!parentCtx) {
+      rt.debug('tool_execution_start with no session/turn context; skipping tool span');
+      return;
+    }
+    // The span NAME is always exported, so its command/path suffix must respect the
+    // same gate as tool arguments: with captureToolIo off, a descriptive name would
+    // still ship the first 60 chars of every shell command (enough for a pasted
+    // Authorization header) despite the user's explicit opt-out.
     const span = rt.tracer.startSpan(
-      formatToolSpanName(toolName, event?.args),
+      config.captureToolIo ? formatToolSpanName(toolName, event?.args) : toolName,
       { kind: SpanKind.INTERNAL },
-      activeParentCtx(state),
+      parentCtx,
     );
     setAttr(span, 'gen_ai.tool.name', toolName);
     setAttr(span, 'gen_ai.tool.call.id', toolCallId);
