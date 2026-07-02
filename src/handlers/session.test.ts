@@ -148,8 +148,17 @@ test('session_shutdown logs the real flush outcome instead of a blanket "flushed
 // ---------------------------------------------------------------------------
 
 test('raceWithTimeout resolves to "timeout" when the work does not settle in time', async () => {
-  const never = new Promise<string>(() => {});
-  assert.equal(await raceWithTimeout(never, 5), 'timeout');
+  // raceWithTimeout unrefs its deadline timer so it can never delay pi's exit. With a
+  // never-settling work promise, that unref'd timer is the only thing left pending, so
+  // the test must hold the event loop open itself or the loop drains before the 5ms
+  // deadline fires (observed on Node 22; Node 24's runner happens to keep a ref).
+  const keepAlive = setTimeout(() => {}, 10_000);
+  try {
+    const never = new Promise<string>(() => {});
+    assert.equal(await raceWithTimeout(never, 5), 'timeout');
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('raceWithTimeout resolves to the work value when it settles before the deadline', async () => {
