@@ -111,6 +111,23 @@ test('message_end ignores non-assistant messages', async () => {
   assert.equal(firstSpan(spans).attrs['gen_ai.usage.input_tokens'], undefined);
 });
 
+test('captureContent=false keeps response text off the LLM span and out of state', async () => {
+  const { rt, handlers, spans } = fakeRuntime({ captureContent: false });
+  registerLlm(rt);
+  await fire(handlers, 'turn_start', { turnIndex: 0 }, MODEL_CTX);
+  await fire(handlers, 'message_end', {
+    message: { role: 'assistant', content: 'proprietary answer', usage: { input: 10, output: 5 } },
+  });
+  const span = firstSpan(spans);
+  assert.equal(span.attrs['traceroot.span.output'], undefined, 'output panel suppressed');
+  assert.equal(span.attrs['gen_ai.usage.output_tokens'], 5, 'token metadata still recorded');
+  assert.equal(
+    rt.state.lastAssistantText,
+    null,
+    'the session-output cache must not retain suppressed content either',
+  );
+});
+
 test('message_end with partial usage defaults the missing token field to 0', async () => {
   const { rt, handlers, spans } = fakeRuntime();
   registerLlm(rt);
