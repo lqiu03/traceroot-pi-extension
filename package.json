@@ -41,7 +41,9 @@
     "test": "node --test src/*.test.ts src/handlers/*.test.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "tsc --noEmit && node --test src/*.test.ts src/handlers/*.test.ts"
+    "sync:version": "node scripts/sync-version.mjs",
+    "check": "node scripts/sync-version.mjs --check && tsc --noEmit && node --test src/*.test.ts src/handlers/*.test.ts",
+    "prepack": "node scripts/sync-version.mjs --check"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
