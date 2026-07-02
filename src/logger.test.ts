@@ -96,3 +96,34 @@ test('a sink that dies mid-session degrades to a silent no-op', async () => {
   logger.log('debug', 'still-silent');
   await logger.flush();
 });
+
+test('the in-memory buffer is bounded and loss is recorded, not silent', async () => {
+  // All synchronous log() calls in one tick run before the first drain() microtask, so
+  // logging past the cap here deterministically exercises the drop path without needing
+  // to actually stall the disk. The bug this guards: an unbounded queue under stalled
+  // I/O grows until OOM.
+  const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
+  try {
+    const file = join(dir, 'debug.log');
+    const logger = createFileLogger(file);
+    const CAP = 10_000;
+    const total = CAP + 2_500;
+    for (let i = 0; i < total; i++) logger.log('debug', `line-${i}`);
+    await logger.flush();
+
+    const lines = readFileSync(file, 'utf8').trim().split('\n');
+    // CAP kept lines + exactly one drop-summary marker.
+    assert.equal(lines.length, CAP + 1, `buffer capped at ${CAP} lines plus a marker`);
+
+    // Oldest lines (closest to the stall onset) are the ones kept.
+    const messages = lines.map((l) => (JSON.parse(l) as { message: string }).message);
+    assert.equal(messages[0], 'line-0', 'the earliest line is retained');
+    assert.ok(!messages.includes(`line-${total - 1}`), 'the newest over-cap line was dropped');
+
+    const marker = JSON.parse(lines.at(-1) ?? '{}') as { level: string; message: string };
+    assert.equal(marker.level, 'warn');
+    assert.match(marker.message, new RegExp(`${total - CAP} debug log line\\(s\\) dropped`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

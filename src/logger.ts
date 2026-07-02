@@ -19,13 +19,23 @@ export interface FileLogger {
 
 const NOOP: FileLogger = { log() {}, async flush() {} };
 
+// Upper bound on buffered-but-not-yet-written lines. If disk writes stall (e.g. a
+// wedged network filesystem), drain() cannot keep up and the queue would otherwise
+// grow without limit — an OOM risk that would violate "logging never affects the
+// session". At ~200 bytes/line this caps the buffer near ~2 MB.
+const MAX_QUEUE_LINES = 10_000;
+
 export function createFileLogger(filePath: string | undefined): FileLogger {
   if (!filePath) return NOOP;
   let prepared = false;
   let broken = false;
   let queue: string[] = [];
+  let dropped = 0;
   let pending = Promise.resolve();
   let scheduled = false;
+
+  const formatLine = (level: string, message: string, data?: unknown): string =>
+    `${JSON.stringify({ timestamp: new Date().toISOString(), level, message, data })}\n`;
 
   // One-time sync setup (once per logger, not per event): create the directory and
   // enforce owner-only permissions — the debug log can contain workspace paths, the
@@ -51,6 +61,16 @@ export function createFileLogger(filePath: string | undefined): FileLogger {
     scheduled = false;
     const batch = queue;
     queue = [];
+    // Record any cap-induced loss in the log itself, so truncation is never silent.
+    if (dropped > 0) {
+      batch.push(
+        formatLine(
+          'warn',
+          `${dropped} debug log line(s) dropped: buffer cap reached under slow I/O`,
+        ),
+      );
+      dropped = 0;
+    }
     if (batch.length === 0) return;
     try {
       await appendFile(filePath, batch.join(''), { encoding: 'utf8', mode: 0o600 });
@@ -62,9 +82,15 @@ export function createFileLogger(filePath: string | undefined): FileLogger {
   return {
     log(level, message, data) {
       if (broken || !prepare()) return;
+      // Bounded buffer: once at the cap (writes are stalling), drop the incoming line
+      // and count it rather than growing memory without limit. Oldest lines — closest
+      // to when the stall began — are kept, which is the most diagnostic window.
+      if (queue.length >= MAX_QUEUE_LINES) {
+        dropped += 1;
+        return;
+      }
       try {
-        const line = JSON.stringify({ timestamp: new Date().toISOString(), level, message, data });
-        queue.push(`${line}\n`);
+        queue.push(formatLine(level, message, data));
         if (!scheduled) {
           scheduled = true;
           pending = pending.then(drain);
