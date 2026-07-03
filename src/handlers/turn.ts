@@ -28,15 +28,23 @@ import type { SpanState } from '../state.ts';
 function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): void {
   const { state, config, envProvided, debug } = rt;
   if (state.projectFinalized) return;
-  state.projectFinalized = true;
   try {
-    if (!ctx?.isProjectTrusted?.()) return;
-    const raw = readProjectLocalConfig(ctx.cwd ?? process.cwd());
-    if (!raw) return;
-    const applied = applyProjectLocal(config, raw, envProvided);
-    if (applied.length) debug('applied project-local config', applied);
-  } catch {
-    /* trust check / read failed — keep base config */
+    if (ctx?.isProjectTrusted?.()) {
+      const raw = readProjectLocalConfig(ctx.cwd ?? process.cwd());
+      if (raw) {
+        const applied = applyProjectLocal(config, raw, envProvided);
+        if (applied.length) debug('applied project-local config', applied);
+      }
+    }
+    // Latch only after reaching the end without a transient error. This is final
+    // whether project-local config was applied, the project was untrusted, or there
+    // was no file — all stable outcomes — so we do not re-read every turn.
+    state.projectFinalized = true;
+  } catch (err) {
+    // A transient failure (trust check unavailable, temporary read error) must NOT
+    // latch: leaving projectFinalized false lets the next agent_start retry, instead of
+    // silencing project-local overrides for the rest of the session.
+    debug('project-local config finalize failed; will retry next turn', err);
   }
 }
 

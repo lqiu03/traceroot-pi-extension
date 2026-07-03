@@ -154,6 +154,56 @@ test('TRACEROOT_SHOW_UI=false suppresses the status indicator, not just the widg
 // agent_start — the effective project reaches exported spans
 // ---------------------------------------------------------------------------
 
+test('a transient trust-check failure on the first turn is retried, not latched off', async () => {
+  // projectFinalized must not latch on a THROWN error, or a temporary trust-service or
+  // file-read failure on the very first prompt silences project-local config for the
+  // whole session. A stable outcome (untrusted / no file / applied) still latches.
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), JSON.stringify({ project: 'repo-project' }));
+    const { rt, handlers } = fakeRuntime({ project: 'global-default' });
+    registerTurn(rt);
+    let trustCalls = 0;
+    const ctx = {
+      ...UI_CTX,
+      cwd: dir,
+      isProjectTrusted: () => {
+        trustCalls += 1;
+        if (trustCalls === 1) throw new Error('trust service temporarily unavailable');
+        return true;
+      },
+    };
+
+    await fire(handlers, 'agent_start', {}, ctx);
+    assert.equal(rt.config.project, 'global-default', 'first turn: override not applied');
+    assert.equal(rt.state.projectFinalized, false, 'a transient failure does not latch');
+
+    await fire(handlers, 'agent_start', {}, ctx);
+    assert.equal(rt.config.project, 'repo-project', 'the retry applies the override');
+    assert.equal(rt.state.projectFinalized, true, 'a successful attempt latches');
+  });
+});
+
+test('an untrusted project latches immediately (stable outcome, no re-read)', async () => {
+  await withTempDir(async (dir) => {
+    const { rt, handlers } = fakeRuntime({ project: 'global-default' });
+    registerTurn(rt);
+    let trustCalls = 0;
+    const ctx = {
+      ...UI_CTX,
+      cwd: dir,
+      isProjectTrusted: () => {
+        trustCalls += 1;
+        return false;
+      },
+    };
+    await fire(handlers, 'agent_start', {}, ctx);
+    await fire(handlers, 'agent_start', {}, ctx);
+    assert.equal(rt.state.projectFinalized, true, 'untrusted is a final outcome');
+    assert.equal(trustCalls, 1, 'the trust check is not repeated once latched');
+  });
+});
+
 test('a trusted project-local traceroot.json project override reaches the session span', async () => {
   // The provider Resource bakes in the load-time project; the project-local file is
   // only applied at first agent_start. The span-level traceroot.project stamp is what
