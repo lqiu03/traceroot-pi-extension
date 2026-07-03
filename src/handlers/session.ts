@@ -4,7 +4,6 @@ import { SpanKind } from '@opentelemetry/api';
 import { endSpan, setAttr } from '../attributes.ts';
 import { beginNewSession, closeAllOpenSpans } from '../state.ts';
 import { readSessionTrace } from '../fork-link.ts';
-import { isSpanId, isTraceId } from '../hex.ts';
 import { clearWidget, setStatus, STATUS_INACTIVE } from '../ui.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -99,13 +98,13 @@ export function registerSession(rt: Runtime): void {
       } catch {
         sessionFile = null;
       }
+      // readSessionTrace only returns non-null when the persisted ids are already
+      // well-formed, so trust its result directly (matching the fork branch above)
+      // rather than re-validating.
       const prior = readSessionTrace(config.stateDir, sessionFile);
       if (prior) {
-        const valid = isTraceId(prior.traceId) && isSpanId(prior.spanId);
-        if (valid) {
-          state.resumeFrom = prior;
-        }
-        debug('session continuation', valid ? 'found' : 'invalid-id');
+        state.resumeFrom = prior;
+        debug('session continuation found');
       }
     }
   });
