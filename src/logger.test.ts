@@ -121,15 +121,21 @@ test('an unwritable log path warns exactly once on stderr, then stays silent', a
 
 test('a sink that dies mid-session degrades to a silent no-op', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
-  const file = join(dir, 'debug.log');
-  const logger = createFileLogger(file);
-  logger.log('debug', 'first');
-  await logger.flush();
-  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); // the log directory disappears
-  logger.log('debug', 'after-death'); // must not throw
-  await logger.flush();
-  logger.log('debug', 'still-silent');
-  await logger.flush();
+  try {
+    const file = join(dir, 'debug.log');
+    const logger = createFileLogger(file);
+    logger.log('debug', 'first');
+    await logger.flush();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); // the log directory disappears
+    logger.log('debug', 'after-death'); // must not throw
+    await logger.flush();
+    logger.log('debug', 'still-silent');
+    await logger.flush();
+  } finally {
+    // force: true so this is a no-op if the mid-test rmSync above already removed it, and
+    // so a throw before that point still cleans up — matching every other test in this file.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 test('the in-memory buffer is bounded and loss is recorded, not silent', async () => {
