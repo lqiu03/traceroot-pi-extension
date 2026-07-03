@@ -51,8 +51,16 @@ export function createFileLogger(filePath: string | undefined): FileLogger {
       mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
       closeSync(openSync(filePath, 'a', 0o600));
       chmodSync(filePath, 0o600);
-    } catch {
-      broken = true; // unwritable path: degrade to a no-op, logging is best-effort
+    } catch (err) {
+      // Degrade to a no-op, but say so once on stderr: a user sets a log file precisely
+      // to diagnose "no traces", and if the path is unwritable both this log and (when
+      // debug is off) the OTLP export diagnostics that route through it vanish silently.
+      // prepare() runs once per logger, so this warning is emitted at most once.
+      broken = true;
+      const detail = err instanceof Error ? `: ${err.message}` : '';
+      console.error(
+        `[@traceroot-ai/pi-extension] debug log file is unwritable (${filePath}); file logging disabled${detail}`,
+      );
     }
     return !broken;
   };

@@ -84,6 +84,41 @@ test('lines logged in the same tick are preserved in order through one buffered 
   }
 });
 
+test('an unwritable log path warns exactly once on stderr, then stays silent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
+  try {
+    // Make the path unwritable portably: put a FILE where a parent directory would need
+    // to be, so mkdir of the log's dirname fails (ENOTDIR) on every platform.
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, 'i am a file, not a directory');
+    const badPath = join(blocker, 'sub', 'debug.log');
+
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map(String).join(' '));
+    };
+    try {
+      const logger = createFileLogger(badPath);
+      logger.log('debug', 'first');
+      await logger.flush();
+      logger.log('debug', 'second'); // must NOT emit a second warning
+      await logger.flush();
+    } finally {
+      console.error = original;
+    }
+
+    const warnings = errors.filter((e) => e.includes('unwritable'));
+    assert.equal(
+      warnings.length,
+      1,
+      'a configured-but-unwritable log path warns once, not zero or twice',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a sink that dies mid-session degrades to a silent no-op', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-log-'));
   const file = join(dir, 'debug.log');
