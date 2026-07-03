@@ -166,3 +166,20 @@ test('pruneStaleSessionTraces keeps entries newer than the cutoff', async () => 
 test('pruneStaleSessionTraces on a missing directory is a silent no-op', async () => {
   await pruneStaleSessionTraces(join(tmpdir(), 'tr-fork-definitely-does-not-exist'));
 });
+
+test('persistSessionTrace resolves (never rejects) when the write cannot happen', async () => {
+  // The caller fires this and does not await, so a failed write must resolve, not reject
+  // — an unhandled rejection would violate best-effort. Point stateDir under a file so
+  // mkdir fails on every platform.
+  const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
+  try {
+    const blocker = join(dir, 'blocker');
+    writeFileSync(blocker, 'a file, not a directory');
+    await assert.doesNotReject(
+      persistSessionTrace(join(blocker, 'state'), '/w/s.jsonl', VALID),
+      'a failed persist is swallowed',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

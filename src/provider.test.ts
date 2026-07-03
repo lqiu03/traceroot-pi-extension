@@ -3,12 +3,21 @@ import { test } from 'node:test';
 import { diag } from '@opentelemetry/api';
 import {
   batchProcessorOptions,
+  buildExporterHeaders,
   diagLoggerFor,
   exporterTimeoutMillis,
   initTracing,
 } from './provider.ts';
 import { resolve } from './config.ts';
 import { restoreEnv } from './test-support.ts';
+
+test('buildExporterHeaders sends a Bearer token only when one is set', () => {
+  assert.deepEqual(buildExporterHeaders(resolve({ token: 'sk-abc' })), {
+    Authorization: 'Bearer sk-abc',
+  });
+  // No token → no Authorization header at all (not a malformed "Bearer ").
+  assert.deepEqual(buildExporterHeaders(resolve({})), {});
+});
 
 // ---------------------------------------------------------------------------
 // diagLoggerFor — the adapter that makes export failures visible

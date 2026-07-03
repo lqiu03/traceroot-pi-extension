@@ -79,16 +79,18 @@ export function batchProcessorOptions(captureFullPayload: boolean): {
   };
 }
 
+// Only attach the Authorization header when a token is present, so a misconfigured
+// (enabled-but-tokenless) setup sends no header rather than a malformed "Bearer ".
+// validateConfig already surfaces the missing-token warning.
+export function buildExporterHeaders(config: TracerootPiConfig): Record<string, string> {
+  return config.token ? { Authorization: `Bearer ${config.token}` } : {};
+}
+
 export function initTracing(config: TracerootPiConfig, diagSink?: DiagSink): Tracing {
   if (diagSink) diag.setLogger(diagLoggerFor(diagSink), DiagLogLevel.WARN);
-  // Only attach the Authorization header when a token is present, so a misconfigured
-  // (enabled-but-tokenless) setup sends no header rather than a malformed "Bearer ".
-  // validateConfig already surfaces the missing-token warning.
-  const headers: Record<string, string> = {};
-  if (config.token) headers.Authorization = `Bearer ${config.token}`;
   const exporter = new OTLPTraceExporter({
     url: config.otlpEndpoint,
-    headers,
+    headers: buildExporterHeaders(config),
     timeoutMillis: exporterTimeoutMillis(),
   });
 

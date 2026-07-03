@@ -1,9 +1,87 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createSpanState } from '../state.ts';
 import { raceWithTimeout, registerSession } from './session.ts';
+import { persistSessionTrace } from '../fork-link.ts';
 import type { Runtime } from '../runtime.ts';
 import { fakeRuntime, fire, UI_CTX } from '../test-support.ts';
+
+// ---------------------------------------------------------------------------
+// session_start — resume/reload continuation and compaction spans
+// ---------------------------------------------------------------------------
+
+test('a resume session sets resumeFrom from the persisted trace', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-sess-'));
+  try {
+    const sessionFile = '/w/session-xyz.jsonl';
+    const trace = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) };
+    await persistSessionTrace(dir, sessionFile, trace);
+
+    const { rt, handlers } = fakeRuntime({ stateDir: dir });
+    registerSession(rt);
+    const ctx = { ...UI_CTX, sessionManager: { getSessionFile: () => sessionFile } };
+    await fire(handlers, 'session_start', { reason: 'resume' }, ctx);
+    assert.deepEqual(
+      rt.state.resumeFrom,
+      trace,
+      'the persisted root is picked up for continuation',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a resume session with no persisted trace leaves resumeFrom null', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-sess-'));
+  try {
+    const { rt, handlers } = fakeRuntime({ stateDir: dir });
+    registerSession(rt);
+    const ctx = { ...UI_CTX, sessionManager: { getSessionFile: () => '/w/never-persisted.jsonl' } };
+    await fire(handlers, 'session_start', { reason: 'resume' }, ctx);
+    assert.equal(rt.state.resumeFrom, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('compaction: before_compact opens a span, compact stamps tokens_before and ends it', async () => {
+  const { rt, handlers, spans } = fakeRuntime();
+  registerSession(rt);
+  rt.state.sessionSpan = rt.tracer.startSpan('pi.session'); // compaction needs an open session
+  await fire(handlers, 'session_before_compact', {});
+  await fire(handlers, 'session_compact', { compactionEntry: { tokensBefore: 1234 } });
+  const compaction = spans.find((s) => s.name === 'pi.compaction');
+  assert.ok(compaction, 'a pi.compaction span was opened');
+  assert.equal(compaction.attrs['traceroot.pi.tokens_before'], 1234);
+  assert.equal(compaction.ended, true, 'the compaction span is ended');
+});
+
+test('compaction: session_compact opens lazily if before_compact never fired', async () => {
+  const { rt, handlers, spans } = fakeRuntime();
+  registerSession(rt);
+  rt.state.sessionSpan = rt.tracer.startSpan('pi.session');
+  await fire(handlers, 'session_compact', { compactionEntry: { tokensBefore: 5 } });
+  const compaction = spans.find((s) => s.name === 'pi.compaction');
+  assert.ok(compaction, 'a compaction span is opened even without before_compact');
+  assert.equal(compaction.attrs['traceroot.pi.tokens_before'], 5);
+  assert.equal(compaction.ended, true);
+});
+
+test('compaction is a no-op when no session span is open', async () => {
+  const { rt, handlers, spans } = fakeRuntime();
+  registerSession(rt);
+  // no sessionSpan set
+  await fire(handlers, 'session_before_compact', {});
+  await fire(handlers, 'session_compact', { compactionEntry: { tokensBefore: 9 } });
+  assert.equal(
+    spans.find((s) => s.name === 'pi.compaction'),
+    undefined,
+    'no compaction span',
+  );
+});
 
 // ---------------------------------------------------------------------------
 // session_start — fork/resume linkage isolation
