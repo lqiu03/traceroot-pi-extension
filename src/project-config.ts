@@ -9,7 +9,11 @@ import { readJsonConfig, type RawConfig, type TracerootPiConfig } from './config
 const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
 type ProjectLocalField = (typeof PROJECT_LOCAL_FIELDS)[number];
 
-export function readProjectLocalConfig(cwd: string): RawConfig | null {
+// The trust decision is a REQUIRED argument, so the boundary this module documents is
+// enforced here rather than resting on call-site discipline: an untrusted workspace's
+// .pi/traceroot.json is never even read. A future caller cannot forget the check.
+export function readProjectLocalConfig(cwd: string, isTrusted: boolean): RawConfig | null {
+  if (!isTrusted) return null;
   return readJsonConfig(join(cwd, '.pi', 'traceroot.json'));
 }
 

@@ -29,12 +29,14 @@ function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): 
   const { state, config, envProvided, debug } = rt;
   if (state.projectFinalized) return;
   try {
-    if (ctx?.isProjectTrusted?.()) {
-      const raw = readProjectLocalConfig(ctx.cwd ?? process.cwd());
-      if (raw) {
-        const applied = applyProjectLocal(config, raw, envProvided);
-        if (applied.length) debug('applied project-local config', applied);
-      }
+    // Evaluate trust inside the try: a throwing trust check is a transient failure that
+    // must not latch (see below). readProjectLocalConfig enforces the boundary itself —
+    // it returns null for an untrusted project and never reads the file.
+    const trusted = ctx?.isProjectTrusted?.() === true;
+    const raw = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
+    if (raw) {
+      const applied = applyProjectLocal(config, raw, envProvided);
+      if (applied.length) debug('applied project-local config', applied);
     }
     // Latch only after reaching the end without a transient error. This is final
     // whether project-local config was applied, the project was untrusted, or there

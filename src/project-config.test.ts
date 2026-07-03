@@ -1,7 +1,28 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resolve, type TracerootPiConfig } from './config.ts';
-import { applyProjectLocal } from './project-config.ts';
+import { applyProjectLocal, readProjectLocalConfig } from './project-config.ts';
+
+test('readProjectLocalConfig refuses to read an untrusted project (self-enforced boundary)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-proj-'));
+  try {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), JSON.stringify({ project: 'evil' }));
+    // Even though a file is present, an untrusted project must never be read — the
+    // module enforces this itself, not only the turn.ts call site.
+    assert.equal(readProjectLocalConfig(dir, false), null, 'untrusted: file is not read');
+    assert.deepEqual(
+      readProjectLocalConfig(dir, true),
+      { project: 'evil' },
+      'trusted: the file is read',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('applies allowed project-local fields', () => {
   const config = resolve({});
