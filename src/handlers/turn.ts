@@ -35,10 +35,13 @@ function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): 
     // it returns 'missing' for an untrusted project and never reads the file.
     const trusted = ctx?.isProjectTrusted?.() === true;
     const result = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
-    if (result.kind === 'ok') {
-      const applied = applyProjectLocal(config, result.config, envProvided);
-      if (applied.length) debug('applied project-local config', applied);
-    } else if (result.kind !== 'missing') {
+    // Always apply — with an empty object when there is no usable file — so the baseline
+    // is restored even when this session has no project-local file. Otherwise a field a
+    // prior session set on the shared config would persist into a session that has none.
+    const raw = result.kind === 'ok' ? result.config : {};
+    const applied = applyProjectLocal(config, raw, envProvided);
+    if (applied.length) debug('applied project-local config', applied);
+    if (result.kind !== 'ok' && result.kind !== 'missing') {
       // A trusted .pi/traceroot.json that exists but is unusable is surfaced like the
       // global file (rather than dropped silently); push it into configIssues so the
       // agent_start config-issue notice below shows it.

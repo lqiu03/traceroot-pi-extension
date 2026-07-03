@@ -115,3 +115,14 @@ test('a re-applied override still wins on the next session', () => {
   applyProjectLocal(config, { project: 'repo-b' }, noEnv);
   assert.equal(config.project, 'repo-b', 'the current session-file value wins');
 });
+
+test('an empty apply after an override restores the baseline (the no-file next session)', () => {
+  // finalizeProjectConfig calls applyProjectLocal with {} when a session has no usable
+  // file, precisely so the baseline is restored rather than the prior override sticking.
+  const config = resolve({ project: 'global-default' });
+  const noEnv = new Set<keyof TracerootPiConfig>();
+  applyProjectLocal(config, { project: 'repo-a', debug: true }, noEnv);
+  applyProjectLocal(config, {}, noEnv); // no file → empty raw
+  assert.equal(config.project, 'global-default');
+  assert.equal(config.debug, false);
+});
