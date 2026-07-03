@@ -145,6 +145,20 @@ test('an explicit OTEL_EXPORTER_OTLP_TIMEOUT defers to the SDK env handling', ()
   });
 });
 
+test('an EMPTY OTEL env var falls back to the tuned default, not the SDK default', () => {
+  // OTEL_EXPORTER_OTLP_TIMEOUT= (empty) must not be treated as "set" — otherwise the SDK
+  // uses its own 10s default and undoes the shutdown-hang fix.
+  withCleanOtelEnv(() => {
+    process.env.OTEL_EXPORTER_OTLP_TIMEOUT = '';
+    assert.ok(
+      typeof exporterTimeoutMillis() === 'number',
+      'empty env value is treated as unset, so the tuned default applies',
+    );
+    process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE = '';
+    assert.ok(typeof batchProcessorOptions(false).maxExportBatchSize === 'number');
+  });
+});
+
 test('batch size shrinks when captureFullPayload inflates per-span attribute weight', () => {
   withCleanOtelEnv(() => {
     const heavy = batchProcessorOptions(true);

@@ -44,9 +44,15 @@ export function diagLoggerFor(sink: DiagSink): DiagLogger {
 
 // Our tuned value for an SDK option, unless the caller set the standard OTel env var —
 // a programmatic value would silently override it (the SDK only reads the env var when
-// the option is not passed), and the env vars are the documented escape hatch.
+// the option is not passed), and the env vars are the documented escape hatch. An empty
+// value (OTEL_..._TIMEOUT=) counts as unset, so it falls back to our tuned default rather
+// than yielding to the SDK's own default (which would undo the shutdown-hang/batch fixes).
 function unlessEnv(fallback: number, ...envNames: string[]): number | undefined {
-  return envNames.some((name) => process.env[name] !== undefined) ? undefined : fallback;
+  const overridden = envNames.some((name) => {
+    const v = process.env[name];
+    return v !== undefined && v !== '';
+  });
+  return overridden ? undefined : fallback;
 }
 
 // The exporter's per-request deadline must sit INSIDE the 5s shutdown race in
