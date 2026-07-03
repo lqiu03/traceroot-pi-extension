@@ -138,14 +138,18 @@ export function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undef
       });
       debug('project-local config ignored', result.kind);
     }
-    // Latch only after reaching the end without a transient error. This is final
-    // whether project-local config was applied, the project was untrusted, or there
-    // was no file — all stable outcomes — so we do not re-read every turn.
+    // Latch on any DIAGNOSED outcome — applied, untrusted, no file, or a file that is
+    // present-but-unusable ('unreadable'/'invalid-json'/'not-object', already warned
+    // above). All are stable for the session: a diagnosed unreadable file is treated as
+    // terminal (warned once) rather than retried every turn, which would re-warn and
+    // re-hit the disk on each agent_start — inconsistent with the codebase's warn-once
+    // handling of unusable config. Only an UNEXPECTED throw skips the latch (see catch).
     state.projectFinalized = true;
   } catch (err) {
-    // A transient failure (trust check unavailable, temporary read error) must NOT
-    // latch: leaving projectFinalized false lets the next agent_start retry, instead of
-    // silencing project-local overrides for the rest of the session.
+    // Only an UNEXPECTED exception reaches here (e.g. isProjectTrusted throwing) — a
+    // diagnosed read failure is returned as 'unreadable' above and latches. An unexpected
+    // throw must NOT latch: leaving projectFinalized false lets the next agent_start retry
+    // rather than silencing project-local overrides for the rest of the session.
     debug('project-local config finalize failed; will retry next turn', err);
   }
 }
