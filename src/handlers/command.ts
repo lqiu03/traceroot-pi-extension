@@ -31,7 +31,9 @@ export function flushNotification(outcome: FlushOutcome): {
 // the URL-encoding in buildTraceUrl — the URL we build is already clean, but a launch
 // must never become a command-injection vector regardless of where the URL came from.
 export function isLaunchableUrl(url: string): boolean {
-  if (/[&|<>^"\s]/.test(url)) return false;
+  // Reject cmd.exe metacharacters, including `%` (cmd expands `%VAR%` in the `/c start`
+  // line). A well-formed trace URL never contains any of these.
+  if (/[&|<>^"%\s]/.test(url)) return false;
   try {
     const parsed = new URL(url);
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';

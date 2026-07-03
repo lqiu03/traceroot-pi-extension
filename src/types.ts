@@ -43,7 +43,6 @@ export interface ExtensionContext {
   sessionManager?: ReadonlySessionManager;
   isProjectTrusted?: () => boolean;
   getContextUsage?: () => ContextUsage | undefined;
-  shutdown?: () => void;
 }
 
 export type CommandContext = ExtensionContext;

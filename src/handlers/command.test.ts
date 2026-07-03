@@ -13,6 +13,7 @@ test('isLaunchableUrl accepts clean http(s) URLs and rejects injection/non-http'
   assert.equal(isLaunchableUrl('http://x|whoami'), false);
   assert.equal(isLaunchableUrl('http://x>out'), false);
   assert.equal(isLaunchableUrl('http://x y'), false); // whitespace
+  assert.equal(isLaunchableUrl('http://host/%USERNAME%'), false); // cmd.exe %VAR% expansion
   // Non-http(s) schemes must be rejected.
   assert.equal(isLaunchableUrl('file:///etc/passwd'), false);
   assert.equal(isLaunchableUrl('javascript:alert(1)'), false);

@@ -7,6 +7,10 @@ test('formatToolSpanName uses the file basename for path-like args', () => {
   assert.equal(formatToolSpanName('write', { file: 'notes.md' }), 'write: notes.md');
   assert.equal(formatToolSpanName('edit', { filePath: 'src/x/y.ts' }), 'edit: y.ts');
   assert.equal(formatToolSpanName('grep', { target: '/etc/hosts' }), 'grep: hosts');
+  // snake_case conventions are recognized too, so the descriptive name the README
+  // advertises is not lost when a tool uses file_path / filename.
+  assert.equal(formatToolSpanName('read', { file_path: '/a/b/app.py' }), 'read: app.py');
+  assert.equal(formatToolSpanName('read', { filename: 'notes.md' }), 'read: notes.md');
 });
 
 test('formatToolSpanName summarizes bash by its (whitespace-collapsed) command', () => {

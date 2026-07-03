@@ -9,7 +9,7 @@ const MAX_BASH_NAME = 60;
 export function formatToolSpanName(toolName: string, args: unknown): string {
   if (args && typeof args === 'object') {
     const a = args as Record<string, unknown>;
-    const pathLike = a.path ?? a.file ?? a.filePath ?? a.target;
+    const pathLike = a.path ?? a.file ?? a.filePath ?? a.file_path ?? a.filename ?? a.target;
     if (typeof pathLike === 'string' && pathLike) return `${toolName}: ${basename(pathLike)}`;
     if (toolName === 'bash' && typeof a.command === 'string' && a.command) {
       const cmd = a.command.replace(/\s+/g, ' ').trim();
