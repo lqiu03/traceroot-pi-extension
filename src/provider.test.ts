@@ -56,6 +56,27 @@ test('initTracing installs the diag logger only when a sink is provided', async 
   }
 });
 
+test('the stock OTEL_TRACES_SAMPLER env var is honored (documented sampling knob)', async () => {
+  // The README points users at OTEL_TRACES_SAMPLER for volume control on long sessions;
+  // this pins that the provider actually respects it, so the doc claim cannot rot.
+  const saved = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('OTEL_')) delete process.env[key];
+    }
+    process.env.OTEL_TRACES_SAMPLER = 'always_off';
+    const config = resolve({ enabled: true, token: 't', otlpEndpoint: 'http://localhost:9/x' });
+    const tracing = initTracing(config);
+    const span = tracing.tracer.startSpan('x');
+    const recording = span.isRecording();
+    span.end();
+    await tracing.provider.shutdown().catch(() => undefined);
+    assert.equal(recording, false, 'always_off must sample the span out');
+  } finally {
+    restoreEnv(saved);
+  }
+});
+
 test('the span attribute-count limit is raised above the default 128', async () => {
   // A session span with many additionalMetadata keys must not hit the SDK's default
   // 128-attribute cap, which would silently drop the close-time span.output and
