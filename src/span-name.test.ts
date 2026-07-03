@@ -13,6 +13,16 @@ test('formatToolSpanName uses the file basename for path-like args', () => {
   assert.equal(formatToolSpanName('read', { filename: 'notes.md' }), 'read: notes.md');
 });
 
+test('formatToolSpanName reduces a Windows-style path to its filename (no path leak)', () => {
+  // POSIX basename would treat the backslashes as literal chars and leak the whole path
+  // — including the username — into the exported span name.
+  assert.equal(
+    formatToolSpanName('read', { path: 'C:\\Users\\alice\\secret-project\\app.py' }),
+    'read: app.py',
+  );
+  assert.equal(formatToolSpanName('edit', { filePath: 'D:\\work\\notes.md' }), 'edit: notes.md');
+});
+
 test('formatToolSpanName summarizes bash by its (whitespace-collapsed) command', () => {
   assert.equal(formatToolSpanName('bash', { command: '  npm   test ' }), 'bash: npm test');
 });

@@ -1,8 +1,14 @@
 // Build a scannable span name for a tool call: "<tool>: <file>" when an argument
 // names a path, "bash: <command>" for shell calls, else just the tool name. Keeps
 // a trace waterfall readable without expanding each span. Pure (no OTel import).
-import { basename } from 'node:path';
+import { win32 } from 'node:path';
 import { safeSlice } from './json.ts';
+
+// win32.basename treats BOTH `/` and `\` as separators, so a Windows-style path in a
+// tool argument (e.g. C:\Users\alice\secret.py) is reduced to its filename rather than
+// leaking the full path — including the username — into the exported span name. POSIX
+// basename would treat `\` as a literal character and leak the whole string.
+const basename = win32.basename;
 
 const MAX_BASH_NAME = 60;
 

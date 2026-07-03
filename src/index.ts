@@ -7,6 +7,7 @@
 import { join } from 'node:path';
 import { loadConfig } from './config.ts';
 import { safeJsonTruncate } from './json.ts';
+import { redactUrlUserinfo } from './url.ts';
 import { createFileLogger } from './logger.ts';
 import { initTracing } from './provider.ts';
 import { closeAllOpenSpans, createSpanState } from './state.ts';
@@ -140,5 +141,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   activeExitListener = onBeforeExit;
   process.once('beforeExit', onBeforeExit);
 
-  rt.debug('registered; endpoint=', config.otlpEndpoint, 'project=', config.project);
+  rt.debug(
+    'registered; endpoint=',
+    redactUrlUserinfo(config.otlpEndpoint),
+    'project=',
+    config.project,
+  );
 }

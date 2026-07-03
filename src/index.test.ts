@@ -96,6 +96,31 @@ test('a disabled clean install stays completely silent', async () => {
   });
 });
 
+test('the debug startup line redacts credentials in the OTLP endpoint', async () => {
+  // With debug on, the "registered; endpoint=" line goes to stderr/the log; an endpoint
+  // with embedded userinfo must not leak the credential there.
+  await withIsolatedEnv(
+    {
+      TRACEROOT_ENABLED: 'true',
+      TRACEROOT_API_KEY: 't',
+      TRACEROOT_PI_DEBUG: 'true',
+      TRACEROOT_OTLP_ENDPOINT: 'https://user:s3cret@collector.internal/v1/traces',
+    },
+    async () => {
+      const { pi } = fakePi();
+      const listenersBefore = process.listeners('beforeExit');
+      const stderr = await withCapturedStderr(() => entry(pi));
+      for (const listener of process.listeners('beforeExit')) {
+        if (!listenersBefore.includes(listener)) process.removeListener('beforeExit', listener);
+      }
+      diag.disable();
+      const joined = stderr.join('\n');
+      assert.ok(joined.includes('registered; endpoint='), 'the debug startup line was emitted');
+      assert.ok(!joined.includes('s3cret'), 'the endpoint credential is not logged');
+    },
+  );
+});
+
 test('a type-mismatched global config file cannot crash extension load', async () => {
   // "stateDir": 123 used to escape sanitizeFileConfig (which only covered booleans),
   // reach join(config.stateDir, ...) OUTSIDE the config try/catch, and throw into the
