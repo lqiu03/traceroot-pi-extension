@@ -126,6 +126,21 @@ test('/traceroot disable records the session output before closing the span', as
   assert.equal(spans[0]?.attrs['traceroot.span.output'], 'the last answer');
 });
 
+test('a command that throws surfaces a user-facing error, not just a debug line', async () => {
+  // A user invoked the command, so a failure must reach them. Force a throw inside the
+  // handler by making buildTraceUrl blow up (uiUrl is not a string) on a UUID projectId.
+  const { rt, run, notifications } = commandRuntime();
+  (rt.config as unknown as { uiUrl: unknown }).uiUrl = undefined;
+  rt.config.projectId = '123e4567-e89b-12d3-a456-426614174000';
+  rt.state.sessionTraceId = 't'.repeat(32);
+  registerCommand(rt);
+  await run('status');
+  assert.ok(
+    notifications.some((n) => n.level === 'error'),
+    'the user is told the command failed',
+  );
+});
+
 test('/traceroot status reports config and session state', async () => {
   const { rt, run, notifications } = commandRuntime();
   registerCommand(rt);

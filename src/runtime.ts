@@ -34,7 +34,13 @@ export function safeOn(
     try {
       await handler(raw, ctx);
     } catch (err) {
-      rt.debug(`handler ${event} threw`, err);
+      // The backstop must be self-contained: if rt.debug itself throws, that rejection
+      // would escape and become an unhandled rejection in the host, defeating the guard.
+      try {
+        rt.debug(`handler ${event} threw`, err);
+      } catch {
+        /* logging the failure must not itself crash pi */
+      }
     }
   });
 }

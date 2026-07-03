@@ -174,6 +174,13 @@ export function registerCommand(rt: Runtime): void {
             );
         }
       } catch (err) {
+        // A user explicitly invoked this command, so — unlike a background event handler
+        // — surface a failure to them, not only to the debug log.
+        try {
+          ctx.ui.notify('Traceroot: the command failed unexpectedly.', 'error');
+        } catch {
+          /* ui unavailable in this mode */
+        }
         rt.debug('command /traceroot threw', err);
       }
     },

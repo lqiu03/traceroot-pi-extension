@@ -43,6 +43,29 @@ test('safeOn contains an async rejection', async () => {
   assert.equal(debugCalls.length, 1, 'the rejection is logged, not thrown');
 });
 
+test('safeOn stays contained even if the debug logger itself throws', async () => {
+  // The backstop must be self-contained: a throwing rt.debug in the catch would otherwise
+  // become an unhandled rejection in the host.
+  const handlers = new Map<string, (raw: unknown, ctx?: unknown) => unknown>();
+  const rt = {
+    pi: {
+      on: (event: string, handler: (raw: unknown, ctx?: unknown) => unknown) =>
+        handlers.set(event, handler),
+    },
+    debug: () => {
+      throw new Error('debug sink is broken');
+    },
+  } as unknown as Pick<Runtime, 'pi' | 'debug'>;
+  safeOn(rt, 'evt', () => {
+    throw new Error('handler boom');
+  });
+  const handler = handlers.get('evt');
+  assert.ok(handler);
+  await assert.doesNotReject(async () => {
+    await handler(null);
+  });
+});
+
 test('safeOn passes raw and ctx through and stays silent on success', async () => {
   const { rt, fire, debugCalls } = harness();
   const seen: unknown[] = [];
