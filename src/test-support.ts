@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSpanState, type SpanState } from './state.ts';
+import { captureProjectLocalBaseline } from './project-config.ts';
 import type { TracerootPiConfig } from './config.ts';
 import type { Runtime } from './runtime.ts';
 
@@ -119,25 +120,29 @@ export function fakeRuntime(config: Partial<TracerootPiConfig> = {}) {
   const handlers = new Map<string, (raw: unknown, ctx?: unknown) => unknown>();
   const { tracer, spans } = recordingTracer();
   const { provider, providerCalls } = fakeProvider();
+  const cfg = {
+    captureFullPayload: false,
+    captureContent: true,
+    captureToolIo: true,
+    showUiIndicator: true,
+    stateDir: '/tmp/pi-review-test',
+    ...config,
+  } as unknown as TracerootPiConfig;
   const rt = {
     pi: {
       on: (event: string, handler: (raw: unknown, ctx?: unknown) => unknown) =>
         handlers.set(event, handler),
     },
     state: createSpanState(),
-    config: {
-      captureFullPayload: false,
-      captureContent: true,
-      captureToolIo: true,
-      showUiIndicator: true,
-      stateDir: '/tmp/pi-review-test',
-      ...config,
-    },
+    config: cfg,
     // A real Set: the declared type is Set<keyof TracerootPiConfig>, and the previous
     // `{}` placeholder made envProvided.has() throw inside finalizeProjectConfig's bare
     // catch — any test through the project-local merge would have passed vacuously.
     envProvided: new Set<keyof TracerootPiConfig>(),
     configIssues: [],
+    // Snapshot the overridable fields from the SAME config object rt.config uses, so
+    // finalizeProjectConfig can restore to a baseline, mirroring index.ts's real runtime.
+    projectLocalBaseline: captureProjectLocalBaseline(cfg),
     provider,
     tracer,
     debug: () => {},

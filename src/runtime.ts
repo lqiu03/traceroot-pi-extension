@@ -4,6 +4,7 @@
 import type { Tracer } from '@opentelemetry/api';
 import type { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import type { ConfigIssue, TracerootPiConfig } from './config.ts';
+import type { ProjectLocalBaseline } from './project-config.ts';
 import type { SpanState } from './state.ts';
 import type { ExtensionAPI } from './types.ts';
 
@@ -12,6 +13,10 @@ export interface Runtime {
   config: TracerootPiConfig;
   envProvided: Set<keyof TracerootPiConfig>;
   configIssues: ConfigIssue[];
+  // The env/global values of the project-local-overridable fields, snapshotted at load.
+  // Threaded into applyProjectLocal so a dropped override restores to it (see
+  // project-config.ts). Immune to later in-place mutation of config, since it is a copy.
+  projectLocalBaseline: ProjectLocalBaseline;
   tracer: Tracer;
   provider: NodeTracerProvider;
   state: SpanState;

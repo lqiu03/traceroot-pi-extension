@@ -1,39 +1,49 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolve, type TracerootPiConfig } from './config.ts';
+import { resolve, type RawConfig, type TracerootPiConfig } from './config.ts';
 import {
   applyProjectLocal,
-  PROJECT_LOCAL_FIELDS,
+  captureProjectLocalBaseline,
   readProjectLocalConfig,
 } from './project-config.ts';
 
-test('applyProjectLocal handles exactly the fields in PROJECT_LOCAL_FIELDS (drift guard)', () => {
-  // baselineFor and the apply blocks repeat the field list for type-safe indexing, which
-  // TS cannot verify against the constant. This guard fails if the constant and the code
-  // drift: every field must be referenced in applyProjectLocal, and no stray field name
-  // should be handled that is not in the constant.
-  const src = readFileSync(new URL('./project-config.ts', import.meta.url), 'utf8');
-  const body = src.slice(src.indexOf('export function applyProjectLocal'));
-  for (const field of PROJECT_LOCAL_FIELDS) {
-    assert.ok(
-      new RegExp(`envProvided\\.has\\('${field}'\\)`).test(body),
-      `applyProjectLocal must handle the "${field}" field from PROJECT_LOCAL_FIELDS`,
+// Behavioral drift guard (replaces a former source-parsing test): every overridable field
+// must APPLY a valid project-local value and RESTORE its baseline when a later session's
+// file drops it. A field missing from the descriptor table would neither apply nor
+// restore, failing here — the intent the old regex test tried to enforce, but survives
+// reformatting/renames because it checks behavior, not source text.
+const DRIFT_CASES = [
+  { key: 'project', value: 'repo-x', baseline: 'base-project' },
+  { key: 'projectId', value: 'uuid-x', baseline: undefined },
+  { key: 'showUiIndicator', value: false, baseline: true },
+  { key: 'debug', value: true, baseline: false },
+] as const;
+
+for (const c of DRIFT_CASES) {
+  test(`project-local field "${c.key}" applies then restores to baseline (drift guard)`, () => {
+    const config = resolve({ project: 'base-project' });
+    const base = captureProjectLocalBaseline(config);
+    const noEnv = new Set<keyof TracerootPiConfig>();
+
+    const applied = applyProjectLocal(config, base, { [c.key]: c.value } as RawConfig, noEnv);
+    assert.deepEqual(applied, [c.key], `${c.key} is applied from the file`);
+    assert.equal(
+      (config as unknown as Record<string, unknown>)[c.key],
+      c.value,
+      `${c.key} took the value`,
     );
-  }
-  // Conversely, every field guarded in applyProjectLocal must be a declared constant.
-  const handled = [...body.matchAll(/envProvided\.has\('(\w+)'\)/g)]
-    .map((m) => m[1])
-    .filter((f): f is string => !!f);
-  for (const field of handled) {
-    assert.ok(
-      (PROJECT_LOCAL_FIELDS as readonly string[]).includes(field),
-      `applyProjectLocal handles "${field}" which is not in PROJECT_LOCAL_FIELDS`,
+
+    applyProjectLocal(config, base, {}, noEnv); // next session: no file
+    assert.equal(
+      (config as unknown as Record<string, unknown>)[c.key],
+      c.baseline,
+      `${c.key} restores to baseline when dropped`,
     );
-  }
-});
+  });
+}
 
 test('readProjectLocalConfig refuses to read an untrusted project (self-enforced boundary)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-proj-'));
@@ -66,8 +76,10 @@ test('readProjectLocalConfig surfaces a malformed trusted file (not silently mis
 
 test('applies allowed project-local fields', () => {
   const config = resolve({});
+  const base = captureProjectLocalBaseline(config);
   const applied = applyProjectLocal(
     config,
+    base,
     { project: 'my-test-project', projectId: 'uuid-1', showUiIndicator: false },
     new Set<keyof TracerootPiConfig>(),
   );
@@ -79,8 +91,10 @@ test('applies allowed project-local fields', () => {
 
 test('env-provided fields are not overridden by project-local', () => {
   const config = resolve({ project: 'from-env' });
+  const base = captureProjectLocalBaseline(config);
   const applied = applyProjectLocal(
     config,
+    base,
     { project: 'from-file' },
     new Set<keyof TracerootPiConfig>(['project']),
   );
@@ -90,8 +104,10 @@ test('env-provided fields are not overridden by project-local', () => {
 
 test('never applies the token from a project-local file', () => {
   const config = resolve({});
+  const base = captureProjectLocalBaseline(config);
   applyProjectLocal(
     config,
+    base,
     { token: 'leaked-token', project: 'ok' } as Record<string, unknown>,
     new Set<keyof TracerootPiConfig>(),
   );
@@ -101,8 +117,10 @@ test('never applies the token from a project-local file', () => {
 
 test('ignores project-local values whose runtime type does not match the field', () => {
   const config = resolve({});
+  const base = captureProjectLocalBaseline(config);
   const applied = applyProjectLocal(
     config,
+    base,
     { projectId: 42, debug: 'yes', showUiIndicator: 'true' } as Record<string, unknown>,
     new Set<keyof TracerootPiConfig>(),
   );
@@ -114,7 +132,13 @@ test('ignores project-local values whose runtime type does not match the field',
 
 test('applies a well-typed boolean debug from a trusted project-local file', () => {
   const config = resolve({});
-  const applied = applyProjectLocal(config, { debug: true }, new Set<keyof TracerootPiConfig>());
+  const base = captureProjectLocalBaseline(config);
+  const applied = applyProjectLocal(
+    config,
+    base,
+    { debug: true },
+    new Set<keyof TracerootPiConfig>(),
+  );
   assert.deepEqual(applied, ['debug']);
   assert.equal(config.debug, true);
 });
@@ -123,14 +147,16 @@ test('a dropped override is restored to baseline on a later apply (no cross-sess
   // pi reuses one config across sessions. Session 1 in a trusted repo sets debug=true and
   // project via project-local; session 2 (same config) has a file that no longer sets
   // them. Those fields must revert to the env/global baseline, not keep session 1's value.
+  // The baseline is captured ONCE (as index.ts does) and threaded into both applies.
   const config = resolve({ project: 'global-default' });
+  const base = captureProjectLocalBaseline(config);
   const noEnv = new Set<keyof TracerootPiConfig>();
 
-  applyProjectLocal(config, { debug: true, project: 'repo-a' }, noEnv);
+  applyProjectLocal(config, base, { debug: true, project: 'repo-a' }, noEnv);
   assert.equal(config.debug, true);
   assert.equal(config.project, 'repo-a');
 
-  const applied = applyProjectLocal(config, {}, noEnv); // session 2: empty file
+  const applied = applyProjectLocal(config, base, {}, noEnv); // session 2: empty file
   assert.deepEqual(applied, [], 'nothing applied from the empty file');
   assert.equal(config.debug, false, 'debug reverts to the baseline (default false)');
   assert.equal(config.project, 'global-default', 'project reverts to the global baseline');
@@ -139,9 +165,10 @@ test('a dropped override is restored to baseline on a later apply (no cross-sess
 test('a re-applied override still wins on the next session', () => {
   // The baseline restore must not clobber a value the CURRENT session does set.
   const config = resolve({ project: 'global-default' });
+  const base = captureProjectLocalBaseline(config);
   const noEnv = new Set<keyof TracerootPiConfig>();
-  applyProjectLocal(config, { project: 'repo-a' }, noEnv);
-  applyProjectLocal(config, { project: 'repo-b' }, noEnv);
+  applyProjectLocal(config, base, { project: 'repo-a' }, noEnv);
+  applyProjectLocal(config, base, { project: 'repo-b' }, noEnv);
   assert.equal(config.project, 'repo-b', 'the current session-file value wins');
 });
 
@@ -149,9 +176,10 @@ test('an empty apply after an override restores the baseline (the no-file next s
   // finalizeProjectConfig calls applyProjectLocal with {} when a session has no usable
   // file, precisely so the baseline is restored rather than the prior override sticking.
   const config = resolve({ project: 'global-default' });
+  const base = captureProjectLocalBaseline(config);
   const noEnv = new Set<keyof TracerootPiConfig>();
-  applyProjectLocal(config, { project: 'repo-a', debug: true }, noEnv);
-  applyProjectLocal(config, {}, noEnv); // no file → empty raw
+  applyProjectLocal(config, base, { project: 'repo-a', debug: true }, noEnv);
+  applyProjectLocal(config, base, {}, noEnv); // no file → empty raw
   assert.equal(config.project, 'global-default');
   assert.equal(config.debug, false);
 });

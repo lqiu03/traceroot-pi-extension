@@ -39,7 +39,7 @@ function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): 
     // is restored even when this session has no project-local file. Otherwise a field a
     // prior session set on the shared config would persist into a session that has none.
     const raw = result.kind === 'ok' ? result.config : {};
-    const applied = applyProjectLocal(config, raw, envProvided);
+    const applied = applyProjectLocal(config, rt.projectLocalBaseline, raw, envProvided);
     if (applied.length) debug('applied project-local config', applied);
     if (result.kind !== 'ok' && result.kind !== 'missing') {
       // A trusted .pi/traceroot.json that exists but is unusable is surfaced like the

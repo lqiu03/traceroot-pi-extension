@@ -10,6 +10,7 @@ import { safeJsonTruncate } from './json.ts';
 import { redactUrlCredentials } from './url.ts';
 import { createFileLogger } from './logger.ts';
 import { initTracing } from './provider.ts';
+import { captureProjectLocalBaseline } from './project-config.ts';
 import { closeAllOpenSpans, createSpanState } from './state.ts';
 import { FLUSH_TIMEOUT_MS, raceWithTimeout, registerSession } from './handlers/session.ts';
 import { registerTurn } from './handlers/turn.ts';
@@ -87,6 +88,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     config,
     envProvided,
     configIssues,
+    // Snapshot the overridable fields now, before any project-local file is applied at
+    // agent_start, so a dropped override in a later session restores to these values.
+    projectLocalBaseline: captureProjectLocalBaseline(config),
     tracer: tracing.tracer,
     provider: tracing.provider,
     state,

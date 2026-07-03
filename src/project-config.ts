@@ -10,34 +10,52 @@ import {
   type TracerootPiConfig,
 } from './config.ts';
 
-// Fields a trusted project-local file is permitted to override. Exported so a drift-guard
-// test can assert applyProjectLocal handles exactly these (baselineFor + the per-field
-// apply blocks repeat them for type-safe indexing, which TypeScript cannot verify against
-// a generic loop — the test is the enforcement).
-export const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
-type ProjectLocalField = (typeof PROJECT_LOCAL_FIELDS)[number];
-type ProjectLocalBaseline = Pick<TracerootPiConfig, ProjectLocalField>;
+// The fields a trusted project-local file is permitted to override. Declared as a union
+// so FIELD_SPECS can be checked against it (a spec keyed on a non-overridable field fails
+// to compile) and so ProjectLocalBaseline picks exactly these from the config.
+type ProjectLocalField = 'project' | 'projectId' | 'showUiIndicator' | 'debug';
 
-// The env/global baseline of the overridable fields, snapshotted once per config object.
-// pi reuses one config across sessions in a process, and applyProjectLocal is the only
-// mutator of these four fields, so the config holds the baseline the first time it is
-// called. Keyed by the config object (WeakMap) so a session whose project-local file
-// drops a key restores the baseline instead of inheriting a prior session's override.
-const baselines = new WeakMap<TracerootPiConfig, ProjectLocalBaseline>();
+// The env/global baseline of the overridable fields, snapshotted once at extension load
+// (captureProjectLocalBaseline) and threaded into every applyProjectLocal call. pi reuses
+// one config object across sessions and applyProjectLocal mutates it in place, so a field
+// a prior session set must be RESTORABLE when a later session's file drops it — the
+// baseline is that restore target. Passed explicitly rather than discovered lazily, so
+// the "what was the original value" question has a visible answer instead of depending on
+// call order (the previous WeakMap captured it on the first call).
+export type ProjectLocalBaseline = Pick<TracerootPiConfig, ProjectLocalField>;
 
-function baselineFor(config: TracerootPiConfig): ProjectLocalBaseline {
-  let base = baselines.get(config);
-  if (!base) {
-    base = {
-      project: config.project,
-      projectId: config.projectId,
-      showUiIndicator: config.showUiIndicator,
-      debug: config.debug,
-    };
-    baselines.set(config, base);
-  }
-  return base;
+// Snapshot the overridable fields from a freshly-loaded config, before any project-local
+// file is applied. Explicit (not a loop) so TypeScript checks it against the baseline
+// shape: adding a field to ProjectLocalField without adding it here fails to compile.
+export function captureProjectLocalBaseline(config: TracerootPiConfig): ProjectLocalBaseline {
+  return {
+    project: config.project,
+    projectId: config.projectId,
+    showUiIndicator: config.showUiIndicator,
+    debug: config.debug,
+  };
 }
+
+// A runtime type guard for a field's value. Typed against the concrete field type so a
+// spec cannot pair a field with the wrong validator (e.g. debug with isString).
+type Validator<T> = (value: unknown) => value is T;
+interface FieldSpec<K extends ProjectLocalField> {
+  key: K;
+  valid: Validator<TracerootPiConfig[K]>;
+}
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
+
+// The single source of truth for the overridable fields and their type guards. `satisfies`
+// checks every key is a ProjectLocalField and every validator matches that field's type,
+// so applyProjectLocal can loop generically with no per-field blocks and no casts.
+const FIELD_SPECS = [
+  { key: 'project', valid: isString },
+  { key: 'projectId', valid: isString },
+  { key: 'showUiIndicator', valid: isBoolean },
+  { key: 'debug', valid: isBoolean },
+] as const satisfies readonly FieldSpec<ProjectLocalField>[];
 
 // The trust decision is a REQUIRED argument, so the boundary this module documents is
 // enforced here rather than resting on call-site discipline: an untrusted workspace's
@@ -49,51 +67,39 @@ export function readProjectLocalConfig(cwd: string, isTrusted: boolean): JsonCon
   return readJsonConfigResult(join(cwd, '.pi', 'traceroot.json'));
 }
 
-// Mutates config in place with allowed project-local fields that env did not set.
-// Returns the list of applied field names (for debug logging).
+// Apply one field: take the project-local value when present and correctly typed,
+// otherwise RESTORE the baseline. Restoring (rather than leaving the field untouched) is
+// what prevents a prior session's override from sticking when a later session's file drops
+// the key or supplies a malformed value. Generic over the single key K so both the write
+// and the baseline read index to the same concrete field type without a cast.
+function applyOne<K extends ProjectLocalField>(
+  config: TracerootPiConfig,
+  base: Pick<TracerootPiConfig, K>,
+  raw: RawConfig,
+  spec: FieldSpec<K>,
+): boolean {
+  const candidate = raw[spec.key];
+  if (spec.valid(candidate)) {
+    config[spec.key] = candidate;
+    return true;
+  }
+  config[spec.key] = base[spec.key];
+  return false;
+}
+
+// Mutates config in place with allowed project-local fields that env did not set, using
+// `base` to restore any overridable field the file does not set. Env-set fields are left
+// alone entirely — env always wins. Returns the list of applied field names (for logging).
 export function applyProjectLocal(
   config: TracerootPiConfig,
+  base: ProjectLocalBaseline,
   raw: RawConfig,
   envProvided: Set<keyof TracerootPiConfig>,
 ): ProjectLocalField[] {
   const applied: ProjectLocalField[] = [];
-  const base = baselineFor(config);
-  // For each overridable field that env did not set: apply the project-local value when
-  // present and correctly typed, otherwise RESTORE the baseline. Restoring (rather than
-  // leaving the field untouched) is what prevents a prior session's override from
-  // sticking when a later session's file drops the key or supplies a malformed value.
-  // Env-set fields are left alone entirely — env always wins.
-  if (!envProvided.has('project')) {
-    if (typeof raw.project === 'string') {
-      config.project = raw.project;
-      applied.push('project');
-    } else {
-      config.project = base.project;
-    }
-  }
-  if (!envProvided.has('projectId')) {
-    if (typeof raw.projectId === 'string') {
-      config.projectId = raw.projectId;
-      applied.push('projectId');
-    } else {
-      config.projectId = base.projectId;
-    }
-  }
-  if (!envProvided.has('showUiIndicator')) {
-    if (typeof raw.showUiIndicator === 'boolean') {
-      config.showUiIndicator = raw.showUiIndicator;
-      applied.push('showUiIndicator');
-    } else {
-      config.showUiIndicator = base.showUiIndicator;
-    }
-  }
-  if (!envProvided.has('debug')) {
-    if (typeof raw.debug === 'boolean') {
-      config.debug = raw.debug;
-      applied.push('debug');
-    } else {
-      config.debug = base.debug;
-    }
+  for (const spec of FIELD_SPECS) {
+    if (envProvided.has(spec.key)) continue;
+    if (applyOne(config, base, raw, spec)) applied.push(spec.key);
   }
   return applied;
 }
