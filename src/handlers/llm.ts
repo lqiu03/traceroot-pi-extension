@@ -2,10 +2,10 @@
 // assistant message_end. Model name comes from the live per-turn ctx.model,
 // falling back to the last model_select only when the context omits it (model_select
 // fires on interactive model changes, not on a CLI --model flag — verified empirically).
-import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
-import { addEvent, endSpan, setAttr } from '../attributes.ts';
+import { context, SpanKind, trace } from '@opentelemetry/api';
+import { addEvent, endSpan, setAttr, setErrorStatus } from '../attributes.ts';
 import { IO_LIMITS, renderMessageContent } from '../content.ts';
-import { safeJsonTruncate, safeSlice } from '../json.ts';
+import { safeJsonTruncate } from '../json.ts';
 import { turnParentCtx, type LlmEntry } from '../state.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -145,13 +145,13 @@ export function registerLlm(rt: Runtime): void {
     // message generic unless full-payload capture is on, so a provider error string
     // (which can echo request content) is not exported by default.
     if (message.stopReason === 'error' || message.stopReason === 'aborted') {
-      const detail =
-        config.captureFullPayload &&
-        typeof message.errorMessage === 'string' &&
-        message.errorMessage.trim()
-          ? safeSlice(message.errorMessage, 256) // surrogate-safe: becomes the span Status message
-          : `LLM turn ${message.stopReason}`;
-      entry.span.setStatus({ code: SpanStatusCode.ERROR, message: detail });
+      // Gate the provider error string (which can echo request content) behind
+      // full-payload capture; setErrorStatus applies the cap + surrogate-safe slice.
+      setErrorStatus(entry.span, {
+        captured: config.captureFullPayload,
+        detail: typeof message.errorMessage === 'string' ? message.errorMessage : undefined,
+        fallback: `LLM turn ${message.stopReason}`,
+      });
     }
 
     // The assistant message is this LLM span's Output; cache it as the session output.

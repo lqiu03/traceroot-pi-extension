@@ -2,9 +2,9 @@
 // parented under the active LLM span. pi runs tools concurrently and their
 // start/end events interleave, so position-based tracking would orphan spans.
 import { performance } from 'node:perf_hooks';
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { endSpan, setAttr } from '../attributes.ts';
-import { safeJsonTruncate, safeSlice } from '../json.ts';
+import { SpanKind } from '@opentelemetry/api';
+import { endSpan, setAttr, setErrorStatus } from '../attributes.ts';
+import { safeJsonTruncate } from '../json.ts';
 import { IO_LIMITS, renderToolResult } from '../content.ts';
 import { formatToolSpanName } from '../span-name.ts';
 import { activeParentCtx } from '../state.ts';
@@ -12,24 +12,18 @@ import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from '../types.ts';
 
-// A short, single-line error message for a failed tool's span status. Pulls from a
-// string result or a result object's error/message field; falls back to a generic
-// "<tool> failed". Callers pass this only when content capture is enabled.
-function toolErrorText(result: unknown, toolName: string): string {
-  // safeSlice, not slice: this string becomes the span Status message, so a cut mid
-  // surrogate pair would emit a lone surrogate into an exported OTLP field.
-  if (typeof result === 'string' && result.trim()) return safeSlice(result, 256);
+// The raw (uncapped) error string from a failed tool's result: a non-empty string
+// result, or a result object's error/message field. Returns undefined when neither is
+// present, so setErrorStatus supplies the generic "<tool> failed" fallback. Capping, the
+// surrogate-safe slice, and the capture gate all live in setErrorStatus.
+function toolErrorDetail(result: unknown): string | undefined {
+  if (typeof result === 'string' && result.trim()) return result;
   if (result && typeof result === 'object') {
     const record = result as { error?: unknown; message?: unknown };
-    const candidate =
-      typeof record.error === 'string'
-        ? record.error
-        : typeof record.message === 'string'
-          ? record.message
-          : undefined;
-    if (candidate && candidate.trim()) return safeSlice(candidate, 256);
+    if (typeof record.error === 'string' && record.error.trim()) return record.error;
+    if (typeof record.message === 'string' && record.message.trim()) return record.message;
   }
-  return `${toolName} failed`;
+  return undefined;
 }
 
 export function registerTool(rt: Runtime): void {
@@ -110,12 +104,13 @@ export function registerTool(rt: Runtime): void {
       );
       if (isError) {
         // Surface tool failures as a queryable OTel error status, not only a boolean.
-        // Keep the message generic when content capture is off so it cannot leak result
-        // text (file contents, command output) through the status message.
-        const message = config.captureToolIo
-          ? toolErrorText(event?.result, entry.toolName)
-          : `${entry.toolName} failed`;
-        entry.span.setStatus({ code: SpanStatusCode.ERROR, message });
+        // setErrorStatus keeps the message generic when tool-IO capture is off, so it
+        // cannot leak result text (file contents, command output).
+        setErrorStatus(entry.span, {
+          captured: config.captureToolIo,
+          detail: toolErrorDetail(event?.result),
+          fallback: `${entry.toolName} failed`,
+        });
       }
     } catch {
       /* best-effort */
