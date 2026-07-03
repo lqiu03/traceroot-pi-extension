@@ -322,6 +322,31 @@ test('collectEnvIssues is silent for recognized values, unset vars, and valid me
   }
 });
 
+test('parse and warn are complementary views of one boolean classifier', () => {
+  // boolEnv (via envRaw) and collectEnvIssues must never disagree about what counts as a
+  // valid boolean: a value envRaw parses is not warned about, and a set value envRaw drops
+  // IS warned about. This fails if the two ever classify spellings differently — the
+  // split-brain this refactor removed.
+  const saved = { ...process.env };
+  try {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith('TRACEROOT_')) delete process.env[k];
+    }
+    process.env.TRACEROOT_ENABLED = 'ON'; // recognized (case-insensitive)
+    assert.equal(resolve(envRaw()).enabled, true, 'a recognized spelling parses');
+    assert.deepEqual(collectEnvIssues(), [], 'a recognized spelling is not warned about');
+
+    process.env.TRACEROOT_ENABLED = 'ture'; // set but unrecognized
+    assert.equal(resolve(envRaw()).enabled, false, 'an unrecognized spelling falls to the default');
+    assert.ok(
+      collectEnvIssues().some((i) => i.path === 'TRACEROOT_ENABLED'),
+      'the same unrecognized value is warned about',
+    );
+  } finally {
+    restoreEnv(saved);
+  }
+});
+
 test('sanitizeFileConfig drops type-mismatched boolean fields and warns (global file)', () => {
   const raw = { enabled: 'false', token: 'ok', captureToolIo: 1 } as unknown as RawConfig;
   const { sanitized, issues } = sanitizeFileConfig(raw, '/cfg.json');

@@ -115,17 +115,30 @@ export const BOOLEAN_ENV_KEYS = [
   'TRACEROOT_SHOW_UI',
 ];
 
+// Classify a raw env value as a boolean: a recognized truthy/falsey spelling, 'unset'
+// for an absent or whitespace-only value, or 'unrecognized' for a set-but-unparseable
+// one (e.g. the typo "ture"). The single home for the trim/lowercase/spelling rule,
+// shared by boolEnv (which treats 'unrecognized' as unset, falling through to the lower
+// layer) and collectEnvIssues (which warns on exactly the 'unrecognized' case) so the
+// two views of "is this a valid boolean" cannot drift apart.
+type BoolClass = 'true' | 'false' | 'unset' | 'unrecognized';
+function classifyBoolValue(raw: string | undefined): BoolClass {
+  if (raw === undefined) return 'unset';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === '') return 'unset';
+  if (TRUE_SPELLINGS.includes(normalized)) return 'true';
+  if (FALSE_SPELLINGS.includes(normalized)) return 'false';
+  return 'unrecognized';
+}
+
 // Accept the common truthy/falsey spellings (case-insensitive, trimmed) so an env
 // boolean is not silently treated as false when set to "1"/"yes"/"on" etc. An unset,
 // empty, or unrecognized value falls through to the lower-precedence layer / default
 // (collectEnvIssues separately warns about the set-but-unrecognized case).
 function boolEnv(name: string): boolean | undefined {
-  const v = process.env[name];
-  if (v === undefined) return undefined;
-  const normalized = v.trim().toLowerCase();
-  if (normalized === '') return undefined;
-  if (TRUE_SPELLINGS.includes(normalized)) return true;
-  if (FALSE_SPELLINGS.includes(normalized)) return false;
+  const kind = classifyBoolValue(process.env[name]);
+  if (kind === 'true') return true;
+  if (kind === 'false') return false;
   return undefined;
 }
 
@@ -148,15 +161,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function jsonObjectEnv(name: string): Record<string, unknown> | undefined {
+// Parse a JSON-object env var into a discriminated result, so jsonObjectEnv (which needs
+// the parsed value) and collectEnvIssues (which needs to warn on a set-but-invalid value)
+// share one parse+validate rule instead of each parsing independently. 'unset' covers an
+// absent or whitespace-only value (strEnv already trims); 'invalid' is set-but-not-a-
+// plain-object (bad JSON, or an array/scalar).
+type JsonObjectParse =
+  { kind: 'unset' } | { kind: 'object'; value: Record<string, unknown> } | { kind: 'invalid' };
+function parseJsonObjectEnv(name: string): JsonObjectParse {
   const v = strEnv(name);
-  if (v === undefined) return undefined;
+  if (v === undefined) return { kind: 'unset' };
   try {
     const parsed: unknown = JSON.parse(v);
-    return isPlainObject(parsed) ? parsed : undefined;
+    return isPlainObject(parsed) ? { kind: 'object', value: parsed } : { kind: 'invalid' };
   } catch {
-    return undefined;
+    return { kind: 'invalid' };
   }
+}
+
+function jsonObjectEnv(name: string): Record<string, unknown> | undefined {
+  const parsed = parseJsonObjectEnv(name);
+  return parsed.kind === 'object' ? parsed.value : undefined;
 }
 
 // First defined value across alias names (SDK-standard name first, legacy fallback).
@@ -331,33 +356,23 @@ export function validateConfig(config: TracerootPiConfig): ConfigIssue[] {
 export function collectEnvIssues(): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   for (const key of BOOLEAN_ENV_KEYS) {
-    const v = process.env[key];
-    if (v === undefined) continue;
-    const normalized = v.trim().toLowerCase();
-    if (normalized === '') continue;
-    if (!TRUE_SPELLINGS.includes(normalized) && !FALSE_SPELLINGS.includes(normalized)) {
+    // Warn on exactly the case boolEnv silently drops — a set-but-unrecognized spelling —
+    // via the same classifier, so this can never disagree with what boolEnv actually did.
+    if (classifyBoolValue(process.env[key]) === 'unrecognized') {
       issues.push({
         path: key,
-        message: `${key} is set to an unrecognized boolean ("${v}"); ignored`,
+        message: `${key} is set to an unrecognized boolean ("${process.env[key]}"); ignored`,
         severity: 'warning',
       });
     }
   }
-  const meta = process.env.TRACEROOT_ADDITIONAL_METADATA;
-  if (meta !== undefined && meta.trim() !== '') {
-    let valid = false;
-    try {
-      valid = isPlainObject(JSON.parse(meta));
-    } catch {
-      valid = false;
-    }
-    if (!valid) {
-      issues.push({
-        path: 'TRACEROOT_ADDITIONAL_METADATA',
-        message: 'TRACEROOT_ADDITIONAL_METADATA is not a JSON object; ignored',
-        severity: 'warning',
-      });
-    }
+  // Warn on the same 'invalid' verdict jsonObjectEnv drops, via the shared parser.
+  if (parseJsonObjectEnv('TRACEROOT_ADDITIONAL_METADATA').kind === 'invalid') {
+    issues.push({
+      path: 'TRACEROOT_ADDITIONAL_METADATA',
+      message: 'TRACEROOT_ADDITIONAL_METADATA is not a JSON object; ignored',
+      severity: 'warning',
+    });
   }
   return issues;
 }
