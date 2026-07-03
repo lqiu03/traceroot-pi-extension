@@ -54,6 +54,21 @@ export async function flushWithTimeout(
   return raceWithTimeout(work, ms);
 }
 
+// Flush and shut down a provider in the background, bounded so a hung endpoint cannot
+// stall the caller. Used for the process-exit fallback and on re-init to drain the
+// previous provider before a new one replaces it. Never throws (a shutdown rejection —
+// e.g. an already-closed exporter — is swallowed); the race timer is unref'd so it does
+// not hold the event loop open. shutdown() runs its own final flush internally.
+export function shutdownProviderInBackground(
+  provider: { shutdown: () => Promise<void> },
+  ms: number = FLUSH_TIMEOUT_MS,
+): void {
+  void raceWithTimeout(
+    provider.shutdown().catch(() => undefined),
+    ms,
+  );
+}
+
 // Surface genuine data loss even when debug logging is off, so a stock install
 // (no logFile, no debug) still learns its session-end spans may not have shipped.
 function reportFlushProblem(outcome: FlushOutcome): void {
@@ -110,6 +125,11 @@ export function registerSession(rt: Runtime): void {
   });
 
   safeOn(rt, 'session_shutdown', async (raw, ctx) => {
+    // Guard against a double-fire after a terminal quit already shut the provider down
+    // (matches the beforeExit fallback in index.ts): a second provider.shutdown() would
+    // reject on the already-closed exporter and misreport a flush 'error', falsely warning
+    // the user that spans were dropped. Nothing left to do once the provider is gone.
+    if (state.providerShutdown) return;
     const event = raw as SessionShutdownEvent;
     setStatus(ctx as ExtensionContext, config, STATUS_INACTIVE);
     // Drop the closed session's trace-URL widget; the next agent_start sets a fresh

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSpanState } from '../state.ts';
-import { raceWithTimeout, registerSession } from './session.ts';
+import { raceWithTimeout, registerSession, shutdownProviderInBackground } from './session.ts';
 import { persistSessionTrace } from '../fork-link.ts';
 import type { Runtime } from '../runtime.ts';
 import { fakeRuntime, fire, UI_CTX } from '../test-support.ts';
@@ -211,6 +211,47 @@ test('a quit session_shutdown shuts the provider down exactly once', async () =>
   await fire(handlers, 'session_shutdown', { reason: 'quit' }, UI_CTX);
   assert.equal(providerCalls.shutdown, 1, 'quit is terminal');
   assert.equal(rt.state.providerShutdown, true);
+});
+
+test('a second quit session_shutdown does not shut the provider down again (double-fire guard)', async () => {
+  // After a terminal quit sets providerShutdown, an abnormal second session_shutdown must
+  // not call provider.shutdown() again — the second call would reject on the already-closed
+  // exporter and misreport a flush 'error', falsely warning the user that spans were dropped.
+  const { rt, handlers, providerCalls } = fakeRuntime();
+  registerSession(rt);
+  await fire(handlers, 'session_shutdown', { reason: 'quit' }, UI_CTX);
+  await fire(handlers, 'session_shutdown', { reason: 'quit' }, UI_CTX);
+  assert.equal(providerCalls.shutdown, 1, 'the second quit is a no-op, not a double shutdown');
+});
+
+test('shutdownProviderInBackground shuts the provider down', async () => {
+  let shutdowns = 0;
+  shutdownProviderInBackground(
+    {
+      shutdown: async () => {
+        shutdowns += 1;
+      },
+    },
+    1000,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let the background shutdown run
+  assert.equal(shutdowns, 1);
+});
+
+test('shutdownProviderInBackground swallows a rejecting shutdown (never throws)', async () => {
+  // A re-init or double-exit can hit an already-closed exporter whose shutdown() rejects;
+  // the helper must not surface that as an unhandled rejection or a throw into the caller.
+  assert.doesNotThrow(() =>
+    shutdownProviderInBackground(
+      {
+        shutdown: async () => {
+          throw new Error('already closed');
+        },
+      },
+      1000,
+    ),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0)); // ensure the rejection is handled
 });
 
 test('a quit session_shutdown does not run a separate forceFlush before shutdown', async () => {
