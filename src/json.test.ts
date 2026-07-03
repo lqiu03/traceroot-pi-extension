@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { safeJsonTruncate, safeSlice } from './json.ts';
+import { safeJsonTruncate, safeSlice, truncateString } from './json.ts';
 
 test('returns short strings unchanged', () => {
   assert.equal(safeJsonTruncate('hello', 2048), 'hello');
@@ -55,4 +55,28 @@ test('returns a marker for unserializable values (cycles)', () => {
 
 test('returns empty string when maxChars is zero', () => {
   assert.equal(safeJsonTruncate('abc', 0), '');
+});
+
+// truncateString is the shared primitive that content.ts (input/output panels) and
+// span-name.ts (bash span names) route through; these pin the contract they rely on.
+test('truncateString appends an ellipsis only when the value is cut', () => {
+  assert.equal(truncateString('abcdef', 3), 'abc…', 'over budget: cut and mark');
+  assert.equal(truncateString('abc', 3), 'abc', 'exactly at budget: unchanged, no marker');
+  assert.equal(truncateString('ab', 3), 'ab', 'under budget: unchanged');
+});
+
+test('truncateString does not split a surrogate pair at the boundary', () => {
+  // "ab" + an astral character (surrogate pair). Cutting at 3 would land mid-pair; the
+  // dangling high surrogate must be dropped before the ellipsis is appended.
+  const out = truncateString(`ab${ASTRAL}`, 3);
+  assert.equal(out, 'ab…');
+  assert.ok(!/[\uD800-\uDBFF]…$/.test(out), 'no lone high surrogate before the ellipsis');
+});
+
+test('truncateString returns empty string for a non-positive budget (no lone marker)', () => {
+  // The old private content.ts copy returned "…" here; the unified primitive returns "".
+  // No live caller passes a budget <= 0 (all IO_LIMITS are >= 2048), so this pins the
+  // edge rather than changing observable behavior.
+  assert.equal(truncateString('abc', 0), '');
+  assert.equal(truncateString('abc', -5), '');
 });

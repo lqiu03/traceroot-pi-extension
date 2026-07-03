@@ -2,7 +2,7 @@
 // input/output panels in Traceroot. pi content is `string | (TextContent | toolCall
 // | image)[]`; tool results are `{ content: TextContent[] }`. We flatten text blocks
 // and summarize tool-call/image blocks rather than dumping raw JSON.
-import { safeJsonTruncate, safeSlice } from './json.ts';
+import { safeJsonTruncate, truncateString } from './json.ts';
 
 // Default character budgets for each input/output surface.
 export const IO_LIMITS = {
@@ -23,14 +23,10 @@ interface ContentBlock {
   input?: unknown;
 }
 
-function truncate(value: string, maxChars: number): string {
-  return value.length > maxChars ? safeSlice(value, maxChars) + '…' : value;
-}
-
 // content: string | (TextContent | toolCall | image)[] -> readable string.
 export function renderMessageContent(content: unknown, maxChars: number): string {
   if (content == null) return '';
-  if (typeof content === 'string') return truncate(content, maxChars);
+  if (typeof content === 'string') return truncateString(content, maxChars);
   if (!Array.isArray(content)) return safeJsonTruncate(content, maxChars);
 
   const parts: string[] = [];
@@ -53,13 +49,13 @@ export function renderMessageContent(content: unknown, maxChars: number): string
     }
     if (parts.length > before) accumulated += (parts[before]?.length ?? 0) + 1;
   }
-  return truncate(parts.join('\n'), maxChars);
+  return truncateString(parts.join('\n'), maxChars);
 }
 
 // AgentToolResult ({ content: TextContent[] }) | string | unknown -> readable string.
 export function renderToolResult(result: unknown, maxChars: number): string {
   if (result == null) return '';
-  if (typeof result === 'string') return truncate(result, maxChars);
+  if (typeof result === 'string') return truncateString(result, maxChars);
   const content = (result as { content?: unknown }).content;
   if (Array.isArray(content)) return renderMessageContent(content, maxChars);
   return safeJsonTruncate(result, maxChars);

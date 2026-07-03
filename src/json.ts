@@ -14,6 +14,17 @@ export function safeSlice(value: string, maxChars: number): string {
   return value.slice(0, end);
 }
 
+// Truncate a plain string to at most maxChars, appending the ELLIPSIS marker when the
+// value is cut. Uses safeSlice, so the cut never splits a surrogate pair. The single
+// home for the "cut on a budget, then mark the truncation" rule AND for the ellipsis
+// glyph — span names, content panels, and JSON payloads all truncate identically, so
+// changing the marker (e.g. to '...') propagates everywhere instead of to one of three
+// copies. An empty budget yields an empty string (no lone marker).
+export function truncateString(value: string, maxChars: number): string {
+  if (maxChars <= 0) return '';
+  return value.length > maxChars ? safeSlice(value, maxChars) + ELLIPSIS : value;
+}
+
 export function safeJsonTruncate(value: unknown, maxChars: number): string {
   let serialized: string | undefined;
   try {
@@ -22,6 +33,5 @@ export function safeJsonTruncate(value: unknown, maxChars: number): string {
     return '[unserializable]';
   }
   if (serialized === undefined) return '';
-  if (maxChars <= 0) return '';
-  return serialized.length > maxChars ? safeSlice(serialized, maxChars) + ELLIPSIS : serialized;
+  return truncateString(serialized, maxChars);
 }

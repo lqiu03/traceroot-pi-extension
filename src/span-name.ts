@@ -2,7 +2,7 @@
 // names a path, "bash: <command>" for shell calls, else just the tool name. Keeps
 // a trace waterfall readable without expanding each span. Pure (no OTel import).
 import { win32 } from 'node:path';
-import { safeSlice } from './json.ts';
+import { truncateString } from './json.ts';
 
 // win32.basename treats BOTH `/` and `\` as separators, so a Windows-style path in a
 // tool argument (e.g. C:\Users\alice\secret.py) is reduced to its filename rather than
@@ -19,10 +19,10 @@ export function formatToolSpanName(toolName: string, args: unknown): string {
     if (typeof pathLike === 'string' && pathLike) return `${toolName}: ${basename(pathLike)}`;
     if (toolName === 'bash' && typeof a.command === 'string' && a.command) {
       const cmd = a.command.replace(/\s+/g, ' ').trim();
-      // safeSlice, not slice: this becomes the exported span NAME, and cutting mid
-      // surrogate pair (e.g. an emoji at the 60-char boundary) would leave a lone
-      // surrogate that corrupts the UTF-8 an OTLP/proto collector requires.
-      return `bash: ${cmd.length > MAX_BASH_NAME ? `${safeSlice(cmd, MAX_BASH_NAME)}…` : cmd}`;
+      // truncateString (which uses safeSlice), not a raw slice: this becomes the exported
+      // span NAME, and cutting mid surrogate pair (e.g. an emoji at the 60-char boundary)
+      // would leave a lone surrogate that corrupts the UTF-8 an OTLP/proto collector requires.
+      return `bash: ${truncateString(cmd, MAX_BASH_NAME)}`;
     }
   }
   return toolName;
