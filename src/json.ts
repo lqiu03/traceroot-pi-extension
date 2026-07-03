@@ -28,7 +28,19 @@ export function truncateString(value: string, maxChars: number): string {
 export function safeJsonTruncate(value: unknown, maxChars: number): string {
   let serialized: string | undefined;
   try {
-    serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    // Cap each string leaf while serializing, so a huge payload (e.g. a Write tool's whole
+    // file body in event.args) is not fully materialized only to keep maxChars. Any char
+    // dropped here sits at leaf-position >= maxChars; a non-string top-level value always
+    // has a structural prefix ({ or [), so that maps to output-position >= maxChars — beyond
+    // the window truncateString keeps. The final output is therefore byte-identical to
+    // serializing in full and truncating; only the peak allocation shrinks from O(payload)
+    // to O(maxChars * leaves). (A top-level string skips JSON.stringify entirely below.)
+    serialized =
+      typeof value === 'string'
+        ? value
+        : JSON.stringify(value, (_key, leaf) =>
+            typeof leaf === 'string' && leaf.length > maxChars ? safeSlice(leaf, maxChars) : leaf,
+          );
   } catch {
     return '[unserializable]';
   }

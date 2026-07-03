@@ -53,6 +53,25 @@ test('returns a marker for unserializable values (cycles)', () => {
   assert.equal(safeJsonTruncate(cyclic, 2048), '[unserializable]');
 });
 
+test('safeJsonTruncate is byte-identical to a naive serialize-then-truncate (leaf-cap is transparent)', () => {
+  // The leaf-capping replacer only shrinks peak allocation; the returned string must equal
+  // what full serialization + truncateString would produce. This fails if the replacer ever
+  // removes a character inside the kept window (it cannot — proof in json.ts).
+  const naive = (v: unknown, n: number): string => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    if (s === undefined) return '';
+    return s.length > n ? safeSlice(s, n) + '…' : s;
+  };
+  const eq = (v: unknown, n: number) =>
+    assert.equal(safeJsonTruncate(v, n), naive(v, n), `equivalence at maxChars=${n}`);
+  eq({ content: 'A'.repeat(100000), tail: 'zzz' }, 2048); // one huge leaf, truncated
+  eq({ a: 'short', b: 'B'.repeat(5000), c: { d: 'D'.repeat(5000) } }, 100); // nested, cut early
+  eq(['x'.repeat(9000), 'y'.repeat(9000)], 512); // array of big leaves
+  eq({ small: 'ok' }, 2048); // no truncation at all
+  eq({ emoji: `${'😀'.repeat(5000)}` }, 2049); // cut lands on a surrogate pair
+  eq(12345, 64); // non-string, non-object root
+});
+
 test('returns empty string when maxChars is zero', () => {
   assert.equal(safeJsonTruncate('abc', 0), '');
 });
