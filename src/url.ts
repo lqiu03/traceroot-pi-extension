@@ -25,7 +25,7 @@ export function buildTraceUrl(config: TracerootPiConfig, traceId: string | null)
 // as a substring (keyword, monkey, design) from being redacted. For a redactor, biasing
 // toward over-masking a benign param is far safer than leaking a real secret.
 const CREDENTIAL_QUERY_PARAM =
-  /(^|[-_])(x[-_]?)?(api[-_]?key|access[-_]?token|token|secret|password|passwd|pwd|auth|credential|signature|sig|key)([-_]|$)/i;
+  /(^|[-_])(x[-_]?)?(authorization|api[-_]?key|access[-_]?token|token|secret|password|passwd|pwd|bearer|jwt|auth|credential|signature|sig|key)([-_]|$)/i;
 
 // Redact credentials from a URL for display, so a secret embedded in an endpoint is not
 // shown in /traceroot status output, screenshots, log files, or shared terminals. Covers

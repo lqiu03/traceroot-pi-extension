@@ -58,6 +58,9 @@ test('redactUrlCredentials masks vendor-prefixed credential params but not benig
     'my-api-key',
     'request_signature',
     'x-api-key',
+    'authorization',
+    'bearer',
+    'jwt',
   ]) {
     const out = redactUrlCredentials(`https://host/p?${key}=SECRET123&keep=1`);
     assert.ok(!out.includes('SECRET123'), `${key} value is masked`);
@@ -65,7 +68,7 @@ test('redactUrlCredentials masks vendor-prefixed credential params but not benig
   }
   // Benign names that merely contain a keyword as an UNBOUNDED substring must not be
   // redacted — the segment boundaries prevent that false positive.
-  for (const key of ['keyword', 'monkey', 'design']) {
+  for (const key of ['keyword', 'monkey', 'design', 'author', 'bearing']) {
     const out = redactUrlCredentials(`https://host/p?${key}=hello`);
     assert.match(out, new RegExp(`${key}=hello`), `${key} is not a false positive`);
   }
