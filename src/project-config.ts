@@ -13,6 +13,28 @@ import {
 // Fields a trusted project-local file is permitted to override.
 const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
 type ProjectLocalField = (typeof PROJECT_LOCAL_FIELDS)[number];
+type ProjectLocalBaseline = Pick<TracerootPiConfig, ProjectLocalField>;
+
+// The env/global baseline of the overridable fields, snapshotted once per config object.
+// pi reuses one config across sessions in a process, and applyProjectLocal is the only
+// mutator of these four fields, so the config holds the baseline the first time it is
+// called. Keyed by the config object (WeakMap) so a session whose project-local file
+// drops a key restores the baseline instead of inheriting a prior session's override.
+const baselines = new WeakMap<TracerootPiConfig, ProjectLocalBaseline>();
+
+function baselineFor(config: TracerootPiConfig): ProjectLocalBaseline {
+  let base = baselines.get(config);
+  if (!base) {
+    base = {
+      project: config.project,
+      projectId: config.projectId,
+      showUiIndicator: config.showUiIndicator,
+      debug: config.debug,
+    };
+    baselines.set(config, base);
+  }
+  return base;
+}
 
 // The trust decision is a REQUIRED argument, so the boundary this module documents is
 // enforced here rather than resting on call-site discipline: an untrusted workspace's
@@ -32,27 +54,43 @@ export function applyProjectLocal(
   envProvided: Set<keyof TracerootPiConfig>,
 ): ProjectLocalField[] {
   const applied: ProjectLocalField[] = [];
-  // Per-field typed assignment. Apply a project-local value only when it is present,
-  // env did not already set it, AND its runtime type matches the field — so an
-  // untrusted/malformed JSON value (e.g. a numeric projectId or a string debug) is
-  // ignored rather than cast straight into typed config.
-  const take = (field: ProjectLocalField): boolean =>
-    raw[field] !== undefined && !envProvided.has(field);
-  if (take('project') && typeof raw.project === 'string') {
-    config.project = raw.project;
-    applied.push('project');
+  const base = baselineFor(config);
+  // For each overridable field that env did not set: apply the project-local value when
+  // present and correctly typed, otherwise RESTORE the baseline. Restoring (rather than
+  // leaving the field untouched) is what prevents a prior session's override from
+  // sticking when a later session's file drops the key or supplies a malformed value.
+  // Env-set fields are left alone entirely — env always wins.
+  if (!envProvided.has('project')) {
+    if (typeof raw.project === 'string') {
+      config.project = raw.project;
+      applied.push('project');
+    } else {
+      config.project = base.project;
+    }
   }
-  if (take('projectId') && typeof raw.projectId === 'string') {
-    config.projectId = raw.projectId;
-    applied.push('projectId');
+  if (!envProvided.has('projectId')) {
+    if (typeof raw.projectId === 'string') {
+      config.projectId = raw.projectId;
+      applied.push('projectId');
+    } else {
+      config.projectId = base.projectId;
+    }
   }
-  if (take('showUiIndicator') && typeof raw.showUiIndicator === 'boolean') {
-    config.showUiIndicator = raw.showUiIndicator;
-    applied.push('showUiIndicator');
+  if (!envProvided.has('showUiIndicator')) {
+    if (typeof raw.showUiIndicator === 'boolean') {
+      config.showUiIndicator = raw.showUiIndicator;
+      applied.push('showUiIndicator');
+    } else {
+      config.showUiIndicator = base.showUiIndicator;
+    }
   }
-  if (take('debug') && typeof raw.debug === 'boolean') {
-    config.debug = raw.debug;
-    applied.push('debug');
+  if (!envProvided.has('debug')) {
+    if (typeof raw.debug === 'boolean') {
+      config.debug = raw.debug;
+      applied.push('debug');
+    } else {
+      config.debug = base.debug;
+    }
   }
   return applied;
 }

@@ -89,3 +89,29 @@ test('applies a well-typed boolean debug from a trusted project-local file', () 
   assert.deepEqual(applied, ['debug']);
   assert.equal(config.debug, true);
 });
+
+test('a dropped override is restored to baseline on a later apply (no cross-session bleed)', () => {
+  // pi reuses one config across sessions. Session 1 in a trusted repo sets debug=true and
+  // project via project-local; session 2 (same config) has a file that no longer sets
+  // them. Those fields must revert to the env/global baseline, not keep session 1's value.
+  const config = resolve({ project: 'global-default' });
+  const noEnv = new Set<keyof TracerootPiConfig>();
+
+  applyProjectLocal(config, { debug: true, project: 'repo-a' }, noEnv);
+  assert.equal(config.debug, true);
+  assert.equal(config.project, 'repo-a');
+
+  const applied = applyProjectLocal(config, {}, noEnv); // session 2: empty file
+  assert.deepEqual(applied, [], 'nothing applied from the empty file');
+  assert.equal(config.debug, false, 'debug reverts to the baseline (default false)');
+  assert.equal(config.project, 'global-default', 'project reverts to the global baseline');
+});
+
+test('a re-applied override still wins on the next session', () => {
+  // The baseline restore must not clobber a value the CURRENT session does set.
+  const config = resolve({ project: 'global-default' });
+  const noEnv = new Set<keyof TracerootPiConfig>();
+  applyProjectLocal(config, { project: 'repo-a' }, noEnv);
+  applyProjectLocal(config, { project: 'repo-b' }, noEnv);
+  assert.equal(config.project, 'repo-b', 'the current session-file value wins');
+});
