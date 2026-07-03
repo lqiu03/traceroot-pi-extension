@@ -10,8 +10,11 @@ import {
   type TracerootPiConfig,
 } from './config.ts';
 
-// Fields a trusted project-local file is permitted to override.
-const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
+// Fields a trusted project-local file is permitted to override. Exported so a drift-guard
+// test can assert applyProjectLocal handles exactly these (baselineFor + the per-field
+// apply blocks repeat them for type-safe indexing, which TypeScript cannot verify against
+// a generic loop — the test is the enforcement).
+export const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
 type ProjectLocalField = (typeof PROJECT_LOCAL_FIELDS)[number];
 type ProjectLocalBaseline = Pick<TracerootPiConfig, ProjectLocalField>;
 

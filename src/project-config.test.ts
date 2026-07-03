@@ -1,10 +1,39 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolve, type TracerootPiConfig } from './config.ts';
-import { applyProjectLocal, readProjectLocalConfig } from './project-config.ts';
+import {
+  applyProjectLocal,
+  PROJECT_LOCAL_FIELDS,
+  readProjectLocalConfig,
+} from './project-config.ts';
+
+test('applyProjectLocal handles exactly the fields in PROJECT_LOCAL_FIELDS (drift guard)', () => {
+  // baselineFor and the apply blocks repeat the field list for type-safe indexing, which
+  // TS cannot verify against the constant. This guard fails if the constant and the code
+  // drift: every field must be referenced in applyProjectLocal, and no stray field name
+  // should be handled that is not in the constant.
+  const src = readFileSync(new URL('./project-config.ts', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export function applyProjectLocal'));
+  for (const field of PROJECT_LOCAL_FIELDS) {
+    assert.ok(
+      new RegExp(`envProvided\\.has\\('${field}'\\)`).test(body),
+      `applyProjectLocal must handle the "${field}" field from PROJECT_LOCAL_FIELDS`,
+    );
+  }
+  // Conversely, every field guarded in applyProjectLocal must be a declared constant.
+  const handled = [...body.matchAll(/envProvided\.has\('(\w+)'\)/g)]
+    .map((m) => m[1])
+    .filter((f): f is string => !!f);
+  for (const field of handled) {
+    assert.ok(
+      (PROJECT_LOCAL_FIELDS as readonly string[]).includes(field),
+      `applyProjectLocal handles "${field}" which is not in PROJECT_LOCAL_FIELDS`,
+    );
+  }
+});
 
 test('readProjectLocalConfig refuses to read an untrusted project (self-enforced boundary)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'tr-proj-'));
