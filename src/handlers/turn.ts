@@ -1,93 +1,19 @@
 // Agent turns. Opens the session span lazily on the first agent_start (so a
 // no-prompt session produces zero spans), then a pi.turn span per agent loop.
-import {
-  context,
-  SpanKind,
-  TraceFlags,
-  trace,
-  type Context,
-  type Link,
-  type Span,
-} from '@opentelemetry/api';
+import { context, SpanKind, trace, type Span } from '@opentelemetry/api';
 import { endSpan, setAttr } from '../attributes.ts';
 import { IO_LIMITS, lastAssistantText } from '../content.ts';
 import { safeJsonTruncate } from '../json.ts';
 import { sweepTurnScoped } from '../state.ts';
-import { applyProjectLocal, readProjectLocalConfig } from '../project-config.ts';
-import { configFileProblemMessage } from '../config.ts';
-import { persistSessionTrace } from '../fork-link.ts';
-import { remoteParentContext } from '../remote-parent.ts';
-import { repoSlug, sessionAttributes } from '../attribution.ts';
+import { finalizeProjectConfig } from '../project-config.ts';
+import { openSessionSpan } from './session-span.ts';
 import { buildTraceUrl } from '../url.ts';
 import { setConfigIssue, setStatus, setTraceWidget, STATUS_ACTIVE } from '../ui.ts';
-import type { MetadataValue, TracerootPiConfig } from '../config.ts';
+import type { TracerootPiConfig } from '../config.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type { BeforeAgentStartEvent, ExtensionContext, InputEvent } from '../types.ts';
 import type { SpanState } from '../state.ts';
-
-function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): void {
-  const { state, config, envProvided, debug } = rt;
-  if (state.projectFinalized) return;
-  try {
-    // Evaluate trust inside the try: a throwing trust check is a transient failure that
-    // must not latch (see below). readProjectLocalConfig enforces the boundary itself —
-    // it returns 'missing' for an untrusted project and never reads the file.
-    const trusted = ctx?.isProjectTrusted?.() === true;
-    const result = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
-    // Always apply — with an empty object when there is no usable file — so the baseline
-    // is restored even when this session has no project-local file. Otherwise a field a
-    // prior session set on the shared config would persist into a session that has none.
-    const raw = result.kind === 'ok' ? result.config : {};
-    const applied = applyProjectLocal(config, rt.projectLocalBaseline, raw, envProvided);
-    if (applied.length) debug('applied project-local config', applied);
-    if (result.kind !== 'ok' && result.kind !== 'missing') {
-      // A trusted .pi/traceroot.json that exists but is unusable is surfaced like the
-      // global file (rather than dropped silently); push it into configIssues so the
-      // agent_start config-issue notice below shows it.
-      rt.configIssues.push({
-        path: '.pi/traceroot.json',
-        message: configFileProblemMessage(result.kind),
-        severity: 'warning',
-      });
-      debug('project-local config ignored', result.kind);
-    }
-    // Latch only after reaching the end without a transient error. This is final
-    // whether project-local config was applied, the project was untrusted, or there
-    // was no file — all stable outcomes — so we do not re-read every turn.
-    state.projectFinalized = true;
-  } catch (err) {
-    // A transient failure (trust check unavailable, temporary read error) must NOT
-    // latch: leaving projectFinalized false lets the next agent_start retry, instead of
-    // silencing project-local overrides for the rest of the session.
-    debug('project-local config finalize failed; will retry next turn', err);
-  }
-}
-
-function sessionLinks(rt: Runtime): Link[] | undefined {
-  const { forkLink } = rt.state;
-  if (!forkLink) return undefined;
-  return [
-    {
-      context: {
-        traceId: forkLink.traceId,
-        spanId: forkLink.spanId,
-        traceFlags: TraceFlags.SAMPLED,
-        isRemote: true,
-      },
-    },
-  ];
-}
-
-function applyAdditionalMetadata(
-  span: Span,
-  metadata: Record<string, MetadataValue> | undefined,
-): void {
-  if (!metadata) return;
-  for (const key of Object.keys(metadata)) {
-    setAttr(span, `traceroot.pi.meta.${key}`, metadata[key]);
-  }
-}
 
 function applyPendingInput(span: Span, state: SpanState, config: TracerootPiConfig): void {
   const input = state.pendingInput;
@@ -106,88 +32,6 @@ function surfaceConfigIssue(rt: Runtime, ctx: ExtensionContext | undefined): voi
   if (rt.configIssues.length === 0) return;
   const primary = rt.configIssues.find((issue) => issue.severity === 'error') ?? rt.configIssues[0];
   setConfigIssue(ctx, primary);
-}
-
-function openSessionSpan(
-  rt: Runtime,
-  ctx: ExtensionContext | undefined,
-  firstPrompt: string | null,
-): void {
-  const { tracer, state, config, debug } = rt;
-  // Parent context: a reload/resume continuation first, else an env-provided
-  // remote parent (subagent nesting). Either keeps this session in an existing
-  // trace; otherwise startSpan with no parent begins a fresh root.
-  const envParentCtx = remoteParentContext(config.rootSpanId, config.parentSpanId);
-  if (!envParentCtx && (config.rootSpanId || config.parentSpanId)) {
-    // The subagent-nesting feature failing validation must not be silent: the parent
-    // process set the env pair expecting a nested trace, and without this line every
-    // child session quietly becomes a fresh root with nothing to explain why.
-    debug(
-      'PI_ROOT_SPAN_ID/PI_PARENT_SPAN_ID set but rejected (need 32-hex trace id + 16-hex span id); starting a fresh root',
-    );
-  }
-  const parentCtx: Context | undefined =
-    (state.resumeFrom && remoteParentContext(state.resumeFrom.traceId, state.resumeFrom.spanId)) ??
-    envParentCtx;
-  const sessionSpan = tracer.startSpan(
-    'pi.session',
-    { kind: SpanKind.INTERNAL, links: sessionLinks(rt) },
-    parentCtx,
-  );
-  const cwd = ctx?.cwd ?? process.cwd();
-  setAttr(sessionSpan, 'traceroot.pi.start_reason', state.sessionStartReason ?? 'startup');
-  // The provider Resource baked in the project known at extension LOAD, but a trusted
-  // repo's .pi/traceroot.json is only applied at the first agent_start (which runs
-  // finalizeProjectConfig before this). Stamp the effective project on the session
-  // span so the documented project-local override actually reaches exported spans;
-  // the span attribute supersedes the stale resource attribute downstream.
-  setAttr(sessionSpan, 'traceroot.project', config.project);
-  // Prompt text is conversation content: gate it (captureContent is the one switch
-  // that keeps typed text on-machine) and cap it — a pasted multi-MB log would
-  // otherwise ride the span through the batch queue and the OTLP payload uncapped,
-  // the only input surface without a limit.
-  if (firstPrompt && config.captureContent) {
-    setAttr(
-      sessionSpan,
-      'traceroot.span.input',
-      safeJsonTruncate(firstPrompt, IO_LIMITS.turnInput),
-    );
-  }
-  setAttr(sessionSpan, 'traceroot.pi.cwd', cwd);
-  const attributes = sessionAttributes(cwd);
-  for (const key of Object.keys(attributes)) {
-    setAttr(sessionSpan, key, attributes[key]);
-  }
-  // The repo slug is a git lookup; resolve it off the hot path and attach it to the
-  // long-lived session span when it settles, so the first prompt is never blocked on git.
-  // repoSlug never rejects, but keep the terminal .catch() so the no-throw guarantee is
-  // local here rather than contingent on that invariant (matches session.ts's flush chain).
-  void repoSlug(cwd)
-    .then((slug) => setAttr(sessionSpan, 'traceroot.pi.repo', slug))
-    .catch((error) => debug('repo slug attribution failed', error));
-  if (state.forkedFromSessionFile) {
-    setAttr(sessionSpan, 'traceroot.pi.forked_from_session', state.forkedFromSessionFile);
-  }
-  if (config.parentSpanId) setAttr(sessionSpan, 'traceroot.pi.parent_span_id', config.parentSpanId);
-  if (config.rootSpanId) setAttr(sessionSpan, 'traceroot.pi.root_span_id', config.rootSpanId);
-  applyAdditionalMetadata(sessionSpan, config.additionalMetadata);
-
-  state.sessionSpan = sessionSpan;
-  state.sessionCtx = trace.setSpan(context.active(), sessionSpan);
-  const sc = sessionSpan.spanContext();
-  state.sessionTraceId = sc.traceId;
-  try {
-    state.sessionFile = ctx?.sessionManager?.getSessionFile?.() ?? null;
-  } catch {
-    state.sessionFile = null;
-  }
-  // On a reload/resume continuation, keep pointing the persisted file at the
-  // original root so repeated reloads stay siblings under it, not a deep chain.
-  const persistedRoot = state.resumeFrom ?? { traceId: sc.traceId, spanId: sc.spanId };
-  // Fire-and-forget: keep the write off the first-prompt tick (a fork/reload reads it
-  // back only in a later session).
-  void persistSessionTrace(config.stateDir, state.sessionFile, persistedRoot);
-  debug('opened session span trace=', sc.traceId, parentCtx ? '(continued)' : '(root)');
 }
 
 export function registerTurn(rt: Runtime): void {

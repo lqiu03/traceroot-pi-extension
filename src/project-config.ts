@@ -4,11 +4,14 @@
 // still win over it.
 import { join } from 'node:path';
 import {
+  configFileProblemMessage,
   readJsonConfigResult,
   type JsonConfigResult,
   type RawConfig,
   type TracerootPiConfig,
 } from './config.ts';
+import type { Runtime } from './runtime.ts';
+import type { ExtensionContext } from './types.ts';
 
 // The fields a trusted project-local file is permitted to override. Declared as a union
 // so FIELD_SPECS can be checked against it (a spec keyed on a non-overridable field fails
@@ -102,4 +105,47 @@ export function applyProjectLocal(
     if (applyOne(config, base, raw, spec)) applied.push(spec.key);
   }
   return applied;
+}
+
+// Merge the trusted project-local file into the shared config on the first agent_start,
+// once per session (latched via state.projectFinalized). Lives here beside the merge and
+// trust-boundary logic it drives, not in the turn handler that happens to trigger it.
+// Callers must invoke this BEFORE opening the session span, so the finalized project name
+// is stamped on exported spans.
+export function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): void {
+  const { state, config, envProvided, debug } = rt;
+  if (state.projectFinalized) return;
+  try {
+    // Evaluate trust inside the try: a throwing trust check is a transient failure that
+    // must not latch (see below). readProjectLocalConfig enforces the boundary itself —
+    // it returns 'missing' for an untrusted project and never reads the file.
+    const trusted = ctx?.isProjectTrusted?.() === true;
+    const result = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
+    // Always apply — with an empty object when there is no usable file — so the baseline
+    // is restored even when this session has no project-local file. Otherwise a field a
+    // prior session set on the shared config would persist into a session that has none.
+    const raw = result.kind === 'ok' ? result.config : {};
+    const applied = applyProjectLocal(config, rt.projectLocalBaseline, raw, envProvided);
+    if (applied.length) debug('applied project-local config', applied);
+    if (result.kind !== 'ok' && result.kind !== 'missing') {
+      // A trusted .pi/traceroot.json that exists but is unusable is surfaced like the
+      // global file (rather than dropped silently); push it into configIssues so the
+      // agent_start config-issue notice below shows it.
+      rt.configIssues.push({
+        path: '.pi/traceroot.json',
+        message: configFileProblemMessage(result.kind),
+        severity: 'warning',
+      });
+      debug('project-local config ignored', result.kind);
+    }
+    // Latch only after reaching the end without a transient error. This is final
+    // whether project-local config was applied, the project was untrusted, or there
+    // was no file — all stable outcomes — so we do not re-read every turn.
+    state.projectFinalized = true;
+  } catch (err) {
+    // A transient failure (trust check unavailable, temporary read error) must NOT
+    // latch: leaving projectFinalized false lets the next agent_start retry, instead of
+    // silencing project-local overrides for the rest of the session.
+    debug('project-local config finalize failed; will retry next turn', err);
+  }
 }
