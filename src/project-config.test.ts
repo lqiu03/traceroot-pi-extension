@@ -13,12 +13,23 @@ test('readProjectLocalConfig refuses to read an untrusted project (self-enforced
     writeFileSync(join(dir, '.pi', 'traceroot.json'), JSON.stringify({ project: 'evil' }));
     // Even though a file is present, an untrusted project must never be read — the
     // module enforces this itself, not only the turn.ts call site.
-    assert.equal(readProjectLocalConfig(dir, false), null, 'untrusted: file is not read');
-    assert.deepEqual(
-      readProjectLocalConfig(dir, true),
-      { project: 'evil' },
-      'trusted: the file is read',
-    );
+    assert.equal(readProjectLocalConfig(dir, false).kind, 'missing', 'untrusted: file is not read');
+    const trusted = readProjectLocalConfig(dir, true);
+    assert.equal(trusted.kind, 'ok');
+    assert.deepEqual(trusted.kind === 'ok' ? trusted.config : null, { project: 'evil' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readProjectLocalConfig surfaces a malformed trusted file (not silently missing)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tr-proj-'));
+  try {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), '{ oops not json');
+    // A trusted file that exists but is unusable must be distinguishable from "no file",
+    // so the caller can warn like the global-file path does.
+    assert.equal(readProjectLocalConfig(dir, true).kind, 'invalid-json');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

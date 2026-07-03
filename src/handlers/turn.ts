@@ -14,6 +14,7 @@ import { IO_LIMITS, lastAssistantText } from '../content.ts';
 import { safeJsonTruncate } from '../json.ts';
 import { sweepTurnScoped } from '../state.ts';
 import { applyProjectLocal, readProjectLocalConfig } from '../project-config.ts';
+import { configFileProblemMessage } from '../config.ts';
 import { persistSessionTrace } from '../fork-link.ts';
 import { remoteParentContext } from '../remote-parent.ts';
 import { repoSlug, sessionAttributes } from '../attribution.ts';
@@ -31,12 +32,22 @@ function finalizeProjectConfig(rt: Runtime, ctx: ExtensionContext | undefined): 
   try {
     // Evaluate trust inside the try: a throwing trust check is a transient failure that
     // must not latch (see below). readProjectLocalConfig enforces the boundary itself —
-    // it returns null for an untrusted project and never reads the file.
+    // it returns 'missing' for an untrusted project and never reads the file.
     const trusted = ctx?.isProjectTrusted?.() === true;
-    const raw = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
-    if (raw) {
-      const applied = applyProjectLocal(config, raw, envProvided);
+    const result = readProjectLocalConfig(ctx?.cwd ?? process.cwd(), trusted);
+    if (result.kind === 'ok') {
+      const applied = applyProjectLocal(config, result.config, envProvided);
       if (applied.length) debug('applied project-local config', applied);
+    } else if (result.kind !== 'missing') {
+      // A trusted .pi/traceroot.json that exists but is unusable is surfaced like the
+      // global file (rather than dropped silently); push it into configIssues so the
+      // agent_start config-issue notice below shows it.
+      rt.configIssues.push({
+        path: '.pi/traceroot.json',
+        message: configFileProblemMessage(result.kind),
+        severity: 'warning',
+      });
+      debug('project-local config ignored', result.kind);
     }
     // Latch only after reaching the end without a transient error. This is final
     // whether project-local config was applied, the project was untrusted, or there

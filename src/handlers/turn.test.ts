@@ -223,6 +223,21 @@ test('a trusted project-local traceroot.json project override reaches the sessio
   });
 });
 
+test('a malformed trusted project-local file is surfaced as a config issue', async () => {
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(join(dir, '.pi', 'traceroot.json'), '{ not valid json');
+    const { rt, handlers } = fakeRuntime({ project: 'global-default' });
+    registerTurn(rt);
+    await fire(handlers, 'agent_start', {}, { ...UI_CTX, cwd: dir, isProjectTrusted: () => true });
+    assert.ok(
+      rt.configIssues.some((i) => i.path === '.pi/traceroot.json' && i.severity === 'warning'),
+      'a malformed trusted project file warns, matching the global-file diagnostics',
+    );
+    assert.equal(rt.config.project, 'global-default', 'the bad file changed nothing');
+  });
+});
+
 test('an untrusted project cannot override the project label', async () => {
   await withTempDir(async (dir) => {
     mkdirSync(join(dir, '.pi'));

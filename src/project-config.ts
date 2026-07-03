@@ -3,7 +3,12 @@
 // fields — never the token, endpoint, or service identity. Environment variables
 // still win over it.
 import { join } from 'node:path';
-import { readJsonConfig, type RawConfig, type TracerootPiConfig } from './config.ts';
+import {
+  readJsonConfigResult,
+  type JsonConfigResult,
+  type RawConfig,
+  type TracerootPiConfig,
+} from './config.ts';
 
 // Fields a trusted project-local file is permitted to override.
 const PROJECT_LOCAL_FIELDS = ['project', 'projectId', 'showUiIndicator', 'debug'] as const;
@@ -11,10 +16,12 @@ type ProjectLocalField = (typeof PROJECT_LOCAL_FIELDS)[number];
 
 // The trust decision is a REQUIRED argument, so the boundary this module documents is
 // enforced here rather than resting on call-site discipline: an untrusted workspace's
-// .pi/traceroot.json is never even read. A future caller cannot forget the check.
-export function readProjectLocalConfig(cwd: string, isTrusted: boolean): RawConfig | null {
-  if (!isTrusted) return null;
-  return readJsonConfig(join(cwd, '.pi', 'traceroot.json'));
+// .pi/traceroot.json is never even read (returns 'missing'). Returns the discriminated
+// result so the caller can diagnose a malformed trusted file like the global one, rather
+// than dropping it silently. A future caller cannot forget the check.
+export function readProjectLocalConfig(cwd: string, isTrusted: boolean): JsonConfigResult {
+  if (!isTrusted) return { kind: 'missing' };
+  return readJsonConfigResult(join(cwd, '.pi', 'traceroot.json'));
 }
 
 // Mutates config in place with allowed project-local fields that env did not set.

@@ -475,13 +475,21 @@ export function sanitizeFileConfig(
   return { sanitized, issues };
 }
 
-// A precise, non-misleading message for each way the global config file can fail to
-// load. 'missing' and 'ok' produce no issue (handled by the caller).
-const GLOBAL_FILE_ISSUE: Record<Exclude<JsonConfigResult['kind'], 'ok' | 'missing'>, string> = {
+// A precise, non-misleading message for each way a JSON config file can fail to load.
+// 'missing' and 'ok' produce no issue (handled by the caller). Shared by the global file
+// and the project-local file so both diagnose consistently.
+export type ConfigFileProblem = Exclude<JsonConfigResult['kind'], 'ok' | 'missing'>;
+const GLOBAL_FILE_ISSUE: Record<ConfigFileProblem, string> = {
   unreadable: 'config file exists but could not be read (check permissions); ignored',
   'invalid-json': 'config file is not valid JSON; ignored',
   'not-object': 'config file must be a JSON object; ignored',
 };
+
+// The precise message for a config file that exists but could not be used. Exposed so
+// the project-local layer (read separately, at agent_start) diagnoses like the global one.
+export function configFileProblemMessage(kind: ConfigFileProblem): string {
+  return GLOBAL_FILE_ISSUE[kind];
+}
 
 export function loadConfig(): ConfigBundle {
   const globalFile = join(homedir(), '.pi', 'agent', 'traceroot.json');
