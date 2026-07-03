@@ -223,6 +223,32 @@ test('a trusted project-local traceroot.json project override reaches the sessio
   });
 });
 
+test('a later session with no project-local file reverts a prior override (handler level)', async () => {
+  // Pins the finalize behavior end-to-end: reverting finalizeProjectConfig to only apply
+  // on result.kind==='ok' keeps the project-config unit tests green but breaks THIS —
+  // the no-file next session must restore the baseline, not inherit session 1's override.
+  await withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.pi'));
+    writeFileSync(
+      join(dir, '.pi', 'traceroot.json'),
+      JSON.stringify({ project: 'repo-a', debug: true }),
+    );
+    const { rt, handlers } = fakeRuntime({ project: 'global-default', debug: false });
+    registerTurn(rt);
+
+    await fire(handlers, 'agent_start', {}, { ...UI_CTX, cwd: dir, isProjectTrusted: () => true });
+    assert.equal(rt.config.project, 'repo-a');
+    assert.equal(rt.config.debug, true);
+
+    // Simulate the next session: session_start's beginNewSession clears the finalize latch.
+    rt.state.projectFinalized = false;
+    // Session 2 has no usable project-local file (untrusted here).
+    await fire(handlers, 'agent_start', {}, { ...UI_CTX, cwd: dir, isProjectTrusted: () => false });
+    assert.equal(rt.config.project, 'global-default', 'project reverts to the baseline');
+    assert.equal(rt.config.debug, false, 'debug reverts to the baseline');
+  });
+});
+
 test('a malformed trusted project-local file is surfaced as a config issue', async () => {
   await withTempDir(async (dir) => {
     mkdirSync(join(dir, '.pi'));

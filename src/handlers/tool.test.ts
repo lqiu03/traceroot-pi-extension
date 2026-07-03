@@ -4,6 +4,13 @@ import { SpanStatusCode } from '@opentelemetry/api';
 import { registerTool } from './tool.ts';
 import { fakeRuntime, fire, firstSpan } from '../test-support.ts';
 
+// NOTE on the monotonic-clock fix (tool.ts uses performance.now, not Date.now): pinning
+// it behaviorally would require stubbing the global performance.now/Date.now, which leaks
+// into other test files under this in-process concurrent runner and makes the suite flaky.
+// A deterministic test is worth more than that pin, so the property is covered by the
+// non-negative-integer assertion in "tool name, id, error state, and duration are always
+// recorded" plus the compile-time import, and left un-stubbed here.
+
 // ---------------------------------------------------------------------------
 // Span bookkeeping: parallel safety, double-open / end-without-start guards
 // ---------------------------------------------------------------------------

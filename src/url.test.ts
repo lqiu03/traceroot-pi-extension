@@ -25,6 +25,14 @@ test('redactUrlUserinfo does not leak the password anywhere in its output', () =
   assert.match(out, /10\.0\.0\.5:4318\/v1\/traces/, 'host and path preserved for troubleshooting');
 });
 
+test('redactUrlUserinfo strips a password even when there is no username', () => {
+  // A `:secret@host` form (empty username) must still be redacted — a naive
+  // `if (!url.username)` guard would leak it.
+  const out = redactUrlUserinfo('https://:s3cret@collector.internal/x');
+  assert.ok(!out.includes('s3cret'), 'password absent');
+  assert.equal(out, 'https://collector.internal/x');
+});
+
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
 
 test('builds a deep link when a UUID projectId and traceId are present', () => {
