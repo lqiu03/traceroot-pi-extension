@@ -1,7 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { resolve } from './config.ts';
-import { buildTraceUrl } from './url.ts';
+import { buildTraceUrl, redactUrlUserinfo } from './url.ts';
+
+test('redactUrlUserinfo strips credentials but keeps host and path', () => {
+  assert.equal(
+    redactUrlUserinfo('https://user:s3cret@collector.internal/v1/traces'),
+    'https://collector.internal/v1/traces',
+  );
+  assert.equal(redactUrlUserinfo('https://token@host/x'), 'https://host/x');
+  // No userinfo: returned unchanged (no spurious rewriting).
+  assert.equal(
+    redactUrlUserinfo('https://app.traceroot.ai/api/v1/public/traces'),
+    'https://app.traceroot.ai/api/v1/public/traces',
+  );
+  // Non-URL value: nothing to redact, returned as-is.
+  assert.equal(redactUrlUserinfo('not a url'), 'not a url');
+});
+
+test('redactUrlUserinfo does not leak the password anywhere in its output', () => {
+  const out = redactUrlUserinfo('https://admin:hunter2@10.0.0.5:4318/v1/traces');
+  assert.ok(!out.includes('hunter2'), 'password absent');
+  assert.ok(!out.includes('admin'), 'username absent');
+  assert.match(out, /10\.0\.0\.5:4318\/v1\/traces/, 'host and path preserved for troubleshooting');
+});
 
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
 

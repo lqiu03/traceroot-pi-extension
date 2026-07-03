@@ -19,3 +19,20 @@ export function buildTraceUrl(config: TracerootPiConfig, traceId: string | null)
   // (or, on the Windows launch path, inject shell metacharacters into cmd.exe).
   return `${base}/projects/${encodeURIComponent(config.projectId)}/traces?traceId=${encodeURIComponent(traceId)}`;
 }
+
+// Strip any userinfo (user:pass@) from a URL for display, so a credential embedded in
+// an endpoint (e.g. TRACEROOT_OTLP_ENDPOINT=https://user:secret@host/...) is not shown
+// in /traceroot status output, screenshots, or shared terminals. The host/path is kept
+// — that is the point of the status line. A value that does not parse as a URL is
+// returned unchanged (nothing to redact).
+export function redactUrlUserinfo(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (!url.username && !url.password) return raw;
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}

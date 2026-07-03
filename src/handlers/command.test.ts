@@ -135,6 +135,17 @@ test('/traceroot status reports config and session state', async () => {
   assert.match(status, /session=active/);
 });
 
+test('/traceroot status redacts credentials embedded in the endpoint', async () => {
+  const { rt, run, notifications } = commandRuntime();
+  rt.config.otlpEndpoint = 'https://svc:topsecret@collector.internal:4318/v1/traces';
+  registerCommand(rt);
+  await run('status');
+  const status = notifications.at(-1)?.message ?? '';
+  assert.ok(!status.includes('topsecret'), 'the password is not shown in status output');
+  assert.ok(!status.includes('svc:'), 'the userinfo is stripped');
+  assert.match(status, /collector\.internal:4318\/v1\/traces/, 'host and path stay visible');
+});
+
 test('/traceroot with no/unknown subcommand defaults to status, an explicit junk arg shows usage', async () => {
   const noArg = commandRuntime();
   registerCommand(noArg.rt);
