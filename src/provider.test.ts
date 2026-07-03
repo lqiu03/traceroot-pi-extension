@@ -56,6 +56,26 @@ test('initTracing installs the diag logger only when a sink is provided', async 
   }
 });
 
+test('the span attribute-count limit is raised above the default 128', async () => {
+  // A session span with many additionalMetadata keys must not hit the SDK's default
+  // 128-attribute cap, which would silently drop the close-time span.output and
+  // shutdown_reason written last.
+  const config = resolve({ enabled: true, token: 't', otlpEndpoint: 'http://localhost:9/x' });
+  const tracing = initTracing(config);
+  try {
+    const span = tracing.tracer.startSpan('t');
+    for (let i = 0; i < 200; i++) span.setAttribute(`k${i}`, i);
+    const attrs = (span as unknown as { attributes: Record<string, unknown> }).attributes;
+    assert.ok(
+      Object.keys(attrs).length > 128,
+      `more than the default 128 attributes are retained (got ${Object.keys(attrs).length})`,
+    );
+    span.end();
+  } finally {
+    await tracing.provider.shutdown().catch(() => undefined);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Export tuning — bounded request deadline and CLI-sized batches
 // ---------------------------------------------------------------------------

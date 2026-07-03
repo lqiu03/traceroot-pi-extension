@@ -105,6 +105,13 @@ export function initTracing(config: TracerootPiConfig, diagSink?: DiagSink): Tra
     // Merge over the SDK defaults so telemetry.sdk.* identity attributes are present;
     // our explicit service/env/project attributes win on conflict.
     resource: Resource.default().merge(new Resource(resourceAttrs)),
+    spanLimits: {
+      // Raise the default 128-attribute cap: a session span carries base attribution
+      // plus one attribute per additionalMetadata key, and once past the cap the SDK
+      // silently drops every later setAttribute — including the close-time span.output
+      // and shutdown_reason. 256 leaves generous room for user metadata.
+      attributeCountLimit: 256,
+    },
     spanProcessors: [
       new BatchSpanProcessor(exporter, batchProcessorOptions(config.captureFullPayload)),
     ],
