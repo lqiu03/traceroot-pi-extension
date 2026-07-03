@@ -367,9 +367,13 @@ export function collectEnvIssues(): ConfigIssue[] {
     // Warn on exactly the case boolEnv silently drops — a set-but-unrecognized spelling —
     // via the same classifier, so this can never disagree with what boolEnv actually did.
     if (classifyBoolValue(process.env[key]) === 'unrecognized') {
+      // Name the key but never echo the value: these issues go to stderr, the file log,
+      // and the UI, and a value placed here by a scripting typo (e.g. TRACEROOT_ENABLED=$API_KEY)
+      // could be a credential. The key alone is enough to locate the offending var, and this
+      // matches the TRACEROOT_ADDITIONAL_METADATA case below, which also omits the raw value.
       issues.push({
         path: key,
-        message: `${key} is set to an unrecognized boolean ("${process.env[key]}"); ignored`,
+        message: `${key} is set to an unrecognized boolean value; ignored`,
         severity: 'warning',
       });
     }

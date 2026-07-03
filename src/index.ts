@@ -131,6 +131,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     registerCommand(rt);
   } catch (err) {
     warn('failed to register handlers', err);
+    // Registration aborted after the provider was created and installed as activeProvider,
+    // and before the beforeExit fallback below was wired up. Drain it here so its
+    // BatchSpanProcessor timer and exporter sockets do not leak, and clear activeProvider so
+    // a later re-init does not shut this same (already-draining) provider down a second time.
+    shutdownProviderInBackground(tracing.provider);
+    activeProvider = undefined;
     return;
   }
 
