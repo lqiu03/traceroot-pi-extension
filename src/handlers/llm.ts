@@ -113,7 +113,7 @@ export function registerLlm(rt: Runtime): void {
       setAttr(stale.span, 'traceroot.pi.turn_incomplete', true);
       endSpan(stale.span);
     }
-    state.llmSpans.set(turnIndex, { span, ctx: llmCtx, startTime: Date.now(), turnIndex });
+    state.llmSpans.set(turnIndex, { span, ctx: llmCtx, turnIndex });
     state.currentLlmTurnIndex = turnIndex;
     rt.debug('opened LLM span turnIndex=', turnIndex, 'model=', label);
   });

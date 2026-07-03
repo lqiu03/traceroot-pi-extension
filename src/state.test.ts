@@ -27,7 +27,7 @@ test('closeAllOpenSpans closes tools -> llm -> turn -> session in order', () => 
   const state = createSpanState();
   state.sessionSpan = fakeSpan('session');
   state.turnSpan = fakeSpan('turn');
-  state.llmSpans.set(0, { span: fakeSpan('llm'), ctx: fakeCtx('llm'), startTime: 0, turnIndex: 0 });
+  state.llmSpans.set(0, { span: fakeSpan('llm'), ctx: fakeCtx('llm'), turnIndex: 0 });
   state.toolSpans.set('tc1', { span: fakeSpan('tool'), startTime: 0, toolName: 'read' });
 
   closeAllOpenSpans(state, 'quit');
@@ -52,7 +52,7 @@ test('sweepTurnScoped closes tools and LLM spans but leaves turn and session ope
   const state = createSpanState();
   state.sessionSpan = fakeSpan('session');
   state.turnSpan = fakeSpan('turn');
-  state.llmSpans.set(0, { span: fakeSpan('llm'), ctx: fakeCtx('llm'), startTime: 0, turnIndex: 0 });
+  state.llmSpans.set(0, { span: fakeSpan('llm'), ctx: fakeCtx('llm'), turnIndex: 0 });
   state.toolSpans.set('tc1', { span: fakeSpan('tool'), startTime: 0, toolName: 'read' });
   state.currentLlmTurnIndex = 0;
 
@@ -114,7 +114,7 @@ test('sweepTurnScoped marks force-closed LLM spans incomplete, like tool spans',
   const state = createSpanState();
   const llm = recordingSpan('llm');
   const tool = recordingSpan('tool');
-  state.llmSpans.set(0, { span: llm.span, ctx: fakeCtx('llm'), startTime: 0, turnIndex: 0 });
+  state.llmSpans.set(0, { span: llm.span, ctx: fakeCtx('llm'), turnIndex: 0 });
   state.toolSpans.set('tc1', { span: tool.span, startTime: 0, toolName: 'read' });
 
   sweepTurnScoped(state);
@@ -153,7 +153,7 @@ test('activeParentCtx prefers the open LLM span', () => {
   state.sessionCtx = fakeCtx('session');
   state.turnCtx = fakeCtx('turn');
   const llmCtx = fakeCtx('llm');
-  state.llmSpans.set(2, { span: fakeSpan('llm'), ctx: llmCtx, startTime: 0, turnIndex: 2 });
+  state.llmSpans.set(2, { span: fakeSpan('llm'), ctx: llmCtx, turnIndex: 2 });
   state.currentLlmTurnIndex = 2;
   assert.equal(activeParentCtx(state), llmCtx);
 });

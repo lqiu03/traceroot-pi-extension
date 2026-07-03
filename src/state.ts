@@ -8,7 +8,6 @@ import { endSpan, setAttr } from './attributes.ts';
 export interface LlmEntry {
   span: Span;
   ctx: Context; // parent context for this turn's tool spans
-  startTime: number;
   turnIndex: number;
 }
 

@@ -237,13 +237,6 @@ export function readJsonConfigResult(file: string): JsonConfigResult {
   return isPlainObject(parsed) ? { kind: 'ok', config: parsed } : { kind: 'not-object' };
 }
 
-// Back-compat convenience for callers that only care whether a usable object was read
-// (e.g. the project-local layer, which stays silent on any problem).
-export function readJsonConfig(file: string): RawConfig | null {
-  const result = readJsonConfigResult(file);
-  return result.kind === 'ok' ? result.config : null;
-}
-
 // Keep only primitive values; arbitrary metadata is emitted as span attributes,
 // which OpenTelemetry restricts to string/number/boolean.
 function primitiveMetadata(
