@@ -25,3 +25,14 @@ test('formatToolSpanName falls back to the bare tool name', () => {
   assert.equal(formatToolSpanName('think', undefined), 'think');
   assert.equal(formatToolSpanName('bash', { command: '' }), 'bash');
 });
+
+test('formatToolSpanName does not split a surrogate pair at the truncation boundary', () => {
+  // 59 ASCII chars + an emoji (a surrogate pair) puts the pair astride the 60-char cut.
+  // A raw slice would keep a lone high surrogate as the last char, corrupting the UTF-8
+  // an OTLP/proto collector requires. The name here becomes the exported span name.
+  const name = formatToolSpanName('bash', { command: 'x'.repeat(59) + '\u{1F600}tail' });
+  assert.ok(name.startsWith('bash: '));
+  assert.ok(name.endsWith('…'));
+  const body = name.slice('bash: '.length, -1); // strip prefix and the ellipsis
+  assert.ok(!/[\uD800-\uDBFF]$/.test(body), 'no dangling lone high surrogate');
+});

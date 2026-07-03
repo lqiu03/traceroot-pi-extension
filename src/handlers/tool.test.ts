@@ -213,6 +213,22 @@ test('an errored tool flags tool_is_error, ends the span, and sets an ERROR stat
   assert.equal(span.status?.message, 'command not found');
 });
 
+test('an errored tool status message does not end in a lone surrogate', async () => {
+  // The error text is sliced to 256 chars and becomes the span Status message (an
+  // exported OTLP field). A raw slice mid emoji would leave a lone high surrogate.
+  const { rt, handlers, spans } = fakeRuntime({ captureToolIo: true });
+  registerTool(rt);
+  await fire(handlers, 'tool_execution_start', { toolCallId: 'c1', toolName: 'bash', args: {} });
+  await fire(handlers, 'tool_execution_end', {
+    toolCallId: 'c1',
+    toolName: 'bash',
+    result: 'e'.repeat(255) + '\u{1F600}', // the surrogate pair straddles the 256 cut
+    isError: true,
+  });
+  const msg = String(firstSpan(spans).status?.message ?? '');
+  assert.ok(!/[\uD800-\uDBFF]$/.test(msg), 'no dangling lone high surrogate in the status message');
+});
+
 test('tool error status message stays generic (no content leak) when tool-IO capture is off', async () => {
   const { rt, handlers, spans } = fakeRuntime({ captureToolIo: false });
   registerTool(rt);

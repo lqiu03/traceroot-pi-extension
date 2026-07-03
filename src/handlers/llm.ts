@@ -5,7 +5,7 @@
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { addEvent, endSpan, setAttr } from '../attributes.ts';
 import { IO_LIMITS, renderMessageContent } from '../content.ts';
-import { boundedJsonHead } from '../json.ts';
+import { boundedJsonHead, safeSlice } from '../json.ts';
 import type { LlmEntry } from '../state.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -149,7 +149,7 @@ export function registerLlm(rt: Runtime): void {
         config.captureFullPayload &&
         typeof message.errorMessage === 'string' &&
         message.errorMessage.trim()
-          ? message.errorMessage.slice(0, 256)
+          ? safeSlice(message.errorMessage, 256) // surrogate-safe: becomes the span Status message
           : `LLM turn ${message.stopReason}`;
       entry.span.setStatus({ code: SpanStatusCode.ERROR, message: detail });
     }

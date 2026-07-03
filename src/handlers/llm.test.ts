@@ -168,6 +168,21 @@ test('message_end error status includes the provider detail only under captureFu
   assert.equal(firstSpan(spans).status?.message, 'user cancelled');
 });
 
+test('a truncated provider error message does not end in a lone surrogate', async () => {
+  const { rt, handlers, spans } = fakeRuntime({ captureFullPayload: true });
+  registerLlm(rt);
+  await fire(handlers, 'turn_start', { turnIndex: 0 }, MODEL_CTX);
+  await fire(handlers, 'message_end', {
+    message: {
+      role: 'assistant',
+      stopReason: 'error',
+      errorMessage: 'e'.repeat(255) + '\u{1F600}', // surrogate pair straddles the 256 cut
+    },
+  });
+  const msg = String(firstSpan(spans).status?.message ?? '');
+  assert.ok(!/[\uD800-\uDBFF]$/.test(msg), 'no dangling lone high surrogate in the status message');
+});
+
 test('message_end with a normal stopReason does not set an error status', async () => {
   const { rt, handlers, spans } = fakeRuntime();
   registerLlm(rt);

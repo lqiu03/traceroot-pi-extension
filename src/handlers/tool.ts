@@ -3,7 +3,7 @@
 // start/end events interleave, so position-based tracking would orphan spans.
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { endSpan, setAttr } from '../attributes.ts';
-import { safeJsonTruncate } from '../json.ts';
+import { safeJsonTruncate, safeSlice } from '../json.ts';
 import { IO_LIMITS, renderToolResult } from '../content.ts';
 import { formatToolSpanName } from '../span-name.ts';
 import { activeParentCtx } from '../state.ts';
@@ -15,7 +15,9 @@ import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from '../types.ts
 // string result or a result object's error/message field; falls back to a generic
 // "<tool> failed". Callers pass this only when content capture is enabled.
 function toolErrorText(result: unknown, toolName: string): string {
-  if (typeof result === 'string' && result.trim()) return result.slice(0, 256);
+  // safeSlice, not slice: this string becomes the span Status message, so a cut mid
+  // surrogate pair would emit a lone surrogate into an exported OTLP field.
+  if (typeof result === 'string' && result.trim()) return safeSlice(result, 256);
   if (result && typeof result === 'object') {
     const record = result as { error?: unknown; message?: unknown };
     const candidate =
@@ -24,7 +26,7 @@ function toolErrorText(result: unknown, toolName: string): string {
         : typeof record.message === 'string'
           ? record.message
           : undefined;
-    if (candidate && candidate.trim()) return candidate.slice(0, 256);
+    if (candidate && candidate.trim()) return safeSlice(candidate, 256);
   }
   return `${toolName} failed`;
 }

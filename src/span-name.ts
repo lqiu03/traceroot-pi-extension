@@ -2,6 +2,7 @@
 // names a path, "bash: <command>" for shell calls, else just the tool name. Keeps
 // a trace waterfall readable without expanding each span. Pure (no OTel import).
 import { basename } from 'node:path';
+import { safeSlice } from './json.ts';
 
 const MAX_BASH_NAME = 60;
 
@@ -12,7 +13,10 @@ export function formatToolSpanName(toolName: string, args: unknown): string {
     if (typeof pathLike === 'string' && pathLike) return `${toolName}: ${basename(pathLike)}`;
     if (toolName === 'bash' && typeof a.command === 'string' && a.command) {
       const cmd = a.command.replace(/\s+/g, ' ').trim();
-      return `bash: ${cmd.length > MAX_BASH_NAME ? `${cmd.slice(0, MAX_BASH_NAME)}…` : cmd}`;
+      // safeSlice, not slice: this becomes the exported span NAME, and cutting mid
+      // surrogate pair (e.g. an emoji at the 60-char boundary) would leave a lone
+      // surrogate that corrupts the UTF-8 an OTLP/proto collector requires.
+      return `bash: ${cmd.length > MAX_BASH_NAME ? `${safeSlice(cmd, MAX_BASH_NAME)}…` : cmd}`;
     }
   }
   return toolName;
