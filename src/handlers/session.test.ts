@@ -30,7 +30,7 @@ test('a resume session sets resumeFrom from the persisted trace', async () => {
       'the persisted root is picked up for continuation',
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -43,7 +43,7 @@ test('a resume session with no persisted trace leaves resumeFrom null', async ()
     await fire(handlers, 'session_start', { reason: 'resume' }, ctx);
     assert.equal(rt.state.resumeFrom, null);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

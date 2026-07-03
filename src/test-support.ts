@@ -41,12 +41,21 @@ export function restoreEnv(saved: NodeJS.ProcessEnv): void {
 }
 
 // Run `fn` against a throwaway temp directory, always cleaning it up afterwards.
+// Cleanup is resilient: a handler under test may spawn a fire-and-forget subprocess
+// (e.g. the git attribution in openSessionSpan) whose cwd is this dir, and on Windows a
+// directory cannot be removed while a process holds it — rmSync then throws EPERM. We
+// retry to give the subprocess time to exit, and swallow a final failure so a cleanup
+// race can never fail the test (the OS reclaims tmpdir regardless).
 export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'tr-test-'));
   try {
     await fn(dir);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    } catch {
+      /* best-effort: a subprocess may still hold the dir; the OS cleans tmpdir */
+    }
   }
 }
 

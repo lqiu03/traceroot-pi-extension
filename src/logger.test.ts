@@ -35,7 +35,7 @@ test('createFileLogger creates the directory, writes owner-only, and persists li
       );
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -61,7 +61,7 @@ test('createFileLogger tightens permissions on a PRE-EXISTING world-readable log
       );
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -80,7 +80,7 @@ test('lines logged in the same tick are preserved in order through one buffered 
       'order is preserved',
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -115,7 +115,7 @@ test('an unwritable log path warns exactly once on stderr, then stays silent', a
       'a configured-but-unwritable log path warns once, not zero or twice',
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -125,7 +125,7 @@ test('a sink that dies mid-session degrades to a silent no-op', async () => {
   const logger = createFileLogger(file);
   logger.log('debug', 'first');
   await logger.flush();
-  rmSync(dir, { recursive: true, force: true }); // the log directory disappears
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); // the log directory disappears
   logger.log('debug', 'after-death'); // must not throw
   await logger.flush();
   logger.log('debug', 'still-silent');
@@ -159,6 +159,6 @@ test('the in-memory buffer is bounded and loss is recorded, not silent', async (
     assert.equal(marker.level, 'warn');
     assert.match(marker.message, new RegExp(`${total - CAP} debug log line\\(s\\) dropped`));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

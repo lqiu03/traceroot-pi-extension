@@ -14,7 +14,7 @@ async function withTempDir(fn: (dir: string) => void | Promise<void>): Promise<v
   try {
     await fn(dir);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -100,7 +100,7 @@ test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps 
     assert.deepEqual(readSessionTrace(dir, fresh), VALID, 'the fresh entry survives');
     assert.equal(readSessionTrace(dir, stale), null, 'the stale session no longer links');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -127,7 +127,7 @@ test('pruneStaleSessionTraces never touches files it does not own, even when old
       assert.equal(existsSync(f), true, `unrelated file preserved: ${f}`);
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -144,7 +144,7 @@ test('equivalent spellings of a session-file path link to the same trace', async
       'a normalized-equivalent path resolves to the same continuity entry',
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -159,7 +159,7 @@ test('pruneStaleSessionTraces keeps entries newer than the cutoff', async () => 
     await pruneStaleSessionTraces(dir);
     assert.deepEqual(readSessionTrace(dir, recent), VALID);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -180,6 +180,6 @@ test('persistSessionTrace resolves (never rejects) when the write cannot happen'
       'a failed persist is swallowed',
     );
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

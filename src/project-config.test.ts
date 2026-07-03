@@ -47,7 +47,7 @@ test('readProjectLocalConfig refuses to read an untrusted project (self-enforced
     assert.equal(trusted.kind, 'ok');
     assert.deepEqual(trusted.kind === 'ok' ? trusted.config : null, { project: 'evil' });
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -60,7 +60,7 @@ test('readProjectLocalConfig surfaces a malformed trusted file (not silently mis
     // so the caller can warn like the global-file path does.
     assert.equal(readProjectLocalConfig(dir, true).kind, 'invalid-json');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

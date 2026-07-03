@@ -162,7 +162,7 @@ function withTempDir(fn: (dir: string) => void): void {
   try {
     fn(dir);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -215,7 +215,7 @@ test('loadConfig reports a non-object global file precisely, not as invalid JSON
     assert.doesNotMatch(issue.message, /not valid JSON/, 'the misleading message is gone');
   } finally {
     restoreEnv(saved);
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
