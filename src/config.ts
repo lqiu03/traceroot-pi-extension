@@ -86,12 +86,20 @@ export interface ConfigBundle {
   configIssues: ConfigIssue[];
 }
 
-function mergeRaw(...layers: Array<RawConfig | null | undefined>): RawConfig {
+// Keys that, if assigned via `out[key] = value`, would mutate the object's prototype
+// rather than set a data property. An untrusted global config file containing "__proto__"
+// (JSON.parse makes it an own, enumerable key) would otherwise reach the assignment below
+// and pollute `out`'s prototype — letting the file influence fields it never legitimately
+// sets (e.g. a `{"__proto__":{"enabled":true}}` file inheriting enabled=true). Skip them.
+const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function mergeRaw(...layers: Array<RawConfig | null | undefined>): RawConfig {
   const out: RawConfig = {};
   for (const layer of layers) {
     if (!layer) continue;
-    for (const key of Object.keys(layer) as Array<keyof RawConfig>) {
-      const value = layer[key];
+    for (const key of Object.keys(layer)) {
+      if (UNSAFE_MERGE_KEYS.has(key)) continue;
+      const value = (layer as Record<string, unknown>)[key];
       if (value !== undefined) (out as Record<string, unknown>)[key] = value;
     }
   }

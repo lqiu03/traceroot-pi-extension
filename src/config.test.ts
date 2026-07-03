@@ -10,6 +10,7 @@ import {
   collectProxyIssues,
   envRaw,
   loadConfig,
+  mergeRaw,
   readJsonConfigResult,
   resolve,
   sanitizeFileConfig,
@@ -320,6 +321,26 @@ test('collectEnvIssues is silent for recognized values, unset vars, and valid me
   } finally {
     restoreEnv(saved);
   }
+});
+
+test('mergeRaw ignores prototype-polluting keys from an untrusted config file', () => {
+  // JSON.parse makes "__proto__" an OWN enumerable key (an object literal would instead
+  // set the prototype), which is the real attack shape from a config file. Merging it must
+  // not replace the result's prototype or inject a field (e.g. enabled) the file never
+  // legitimately sets.
+  const malicious = JSON.parse(
+    '{"__proto__":{"enabled":true},"constructor":{"x":1},"project":"ok"}',
+  ) as RawConfig;
+  const merged = mergeRaw(malicious);
+  assert.equal(Object.getPrototypeOf(merged), Object.prototype, 'prototype is not replaced');
+  assert.equal(
+    (merged as Record<string, unknown>).enabled,
+    undefined,
+    'no field injected through __proto__',
+  );
+  assert.equal(merged.project, 'ok', 'legitimate keys still merge');
+  // No global fallout: an unrelated fresh object never inherited the injected field.
+  assert.equal(({} as Record<string, unknown>).enabled, undefined);
 });
 
 test('parse and warn are complementary views of one boolean classifier', () => {
