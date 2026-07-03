@@ -23,7 +23,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # Fail fast — verify tag matches package.json before running checks.
       # The tag name is passed via env, NOT interpolated into the script: a release
