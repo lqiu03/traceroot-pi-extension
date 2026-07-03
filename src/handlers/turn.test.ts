@@ -11,6 +11,22 @@ import { fakeRuntime, fire, initGitRepo, UI_CTX, withTempDir } from '../test-sup
 // before_agent_start / input — buffering
 // ---------------------------------------------------------------------------
 
+test('buffered input is dropped when the agent loop is skipped for a disabled session', async () => {
+  // Input arrives while enabled (buffered, including gated raw text), the session is then
+  // disabled, and an agent loop starts. The buffered input must NOT survive to be
+  // mis-attributed to a later turn once tracing is re-enabled — same guarantee the code
+  // already gives pendingPrompt.
+  const { rt, handlers } = fakeRuntime({ captureFullPayload: true });
+  registerTurn(rt);
+  await fire(handlers, 'input', { source: 'paste', text: 'secret pasted text' });
+  assert.ok(rt.state.pendingInput, 'input was buffered while enabled');
+  assert.equal(rt.state.pendingInput?.raw, 'secret pasted text', 'gated raw text buffered');
+
+  rt.state.sessionDisabled = true;
+  await fire(handlers, 'agent_start', {}, UI_CTX);
+  assert.equal(rt.state.pendingInput, null, 'stale buffered input is cleared on the disabled loop');
+});
+
 test('before_agent_start buffers the prompt for the next turn', async () => {
   const { rt, handlers } = fakeRuntime();
   registerTurn(rt);

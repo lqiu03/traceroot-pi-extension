@@ -62,7 +62,13 @@ export function registerTurn(rt: Runtime): void {
     // (e.g. when this loop is skipped because tracing is disabled).
     const prompt = state.pendingPrompt;
     state.pendingPrompt = null;
-    if (state.sessionDisabled) return;
+    if (state.sessionDisabled) {
+      // Same reason as pendingPrompt: input metadata buffered while enabled must not
+      // survive a disabled loop and get mis-attributed (with its gated raw text) to a
+      // later turn once tracing is re-enabled. Drop it here rather than let it stick.
+      state.pendingInput = null;
+      return;
+    }
     const ctx = rawCtx as ExtensionContext;
     finalizeProjectConfig(rt, ctx);
 
