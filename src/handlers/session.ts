@@ -6,6 +6,7 @@ import { beginNewSession, closeAllOpenSpans } from '../state.ts';
 import { readSessionTrace } from '../fork-link.ts';
 import { isSpanId, isTraceId } from '../hex.ts';
 import { clearWidget, setStatus, STATUS_INACTIVE } from '../ui.ts';
+import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type {
   ExtensionContext,
@@ -64,9 +65,9 @@ function reportFlushProblem(outcome: FlushOutcome): void {
 }
 
 export function registerSession(rt: Runtime): void {
-  const { pi, state, provider, config, debug } = rt;
+  const { state, provider, config, debug } = rt;
 
-  pi.on('session_start', async (raw, rawCtx) => {
+  safeOn(rt, 'session_start', async (raw, rawCtx) => {
     const event = raw as SessionStartEvent;
     const ctx = rawCtx as ExtensionContext;
     const reason = event?.reason;
@@ -109,7 +110,7 @@ export function registerSession(rt: Runtime): void {
     }
   });
 
-  pi.on('session_shutdown', async (raw, ctx) => {
+  safeOn(rt, 'session_shutdown', async (raw, ctx) => {
     const event = raw as SessionShutdownEvent;
     setStatus(ctx as ExtensionContext, config, STATUS_INACTIVE);
     // Drop the closed session's trace-URL widget; the next agent_start sets a fresh
@@ -148,7 +149,7 @@ export function registerSession(rt: Runtime): void {
   });
 
   // P2-C — compaction as a timed child span on the session.
-  pi.on('session_before_compact', async () => {
+  safeOn(rt, 'session_before_compact', async () => {
     if (state.sessionDisabled || !state.sessionSpan || state.compactionSpan) return;
     state.compactionSpan = rt.tracer.startSpan(
       'pi.compaction',
@@ -157,7 +158,7 @@ export function registerSession(rt: Runtime): void {
     );
   });
 
-  pi.on('session_compact', async (raw) => {
+  safeOn(rt, 'session_compact', async (raw) => {
     const event = raw as SessionCompactEvent;
     const tokensBefore = event?.compactionEntry?.tokensBefore ?? 0;
     // Open lazily if before_compact never fired, so the compaction still records.

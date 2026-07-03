@@ -7,6 +7,7 @@ import { addEvent, endSpan, setAttr } from '../attributes.ts';
 import { IO_LIMITS, renderMessageContent } from '../content.ts';
 import { boundedJsonHead } from '../json.ts';
 import type { LlmEntry } from '../state.ts';
+import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type {
   AfterProviderResponseEvent,
@@ -42,14 +43,14 @@ export function resolveModel(
 }
 
 export function registerLlm(rt: Runtime): void {
-  const { pi, state, config } = rt;
+  const { state, config } = rt;
 
   const currentLlm = (): LlmEntry | undefined => {
     if (state.currentLlmTurnIndex === null) return undefined;
     return state.llmSpans.get(state.currentLlmTurnIndex);
   };
 
-  pi.on('model_select', async (raw) => {
+  safeOn(rt, 'model_select', async (raw) => {
     const event = raw as ModelSelectEvent;
     if (event?.model?.provider && event?.model?.id) {
       state.currentModel = { provider: event.model.provider, id: event.model.id };
@@ -57,13 +58,13 @@ export function registerLlm(rt: Runtime): void {
     }
   });
 
-  pi.on('thinking_level_select', async (raw) => {
+  safeOn(rt, 'thinking_level_select', async (raw) => {
     const level = (raw as { level?: string })?.level;
     state.thinkingLevel = typeof level === 'string' ? level : null;
     rt.debug('thinking_level', state.thinkingLevel);
   });
 
-  pi.on('turn_start', async (raw, rawCtx) => {
+  safeOn(rt, 'turn_start', async (raw, rawCtx) => {
     if (state.sessionDisabled) return;
     // No turn/session context means agent_start has not (re)opened the session span yet
     // — e.g. between a /traceroot enable and the next prompt. Opening an LLM span with no
@@ -117,7 +118,7 @@ export function registerLlm(rt: Runtime): void {
     rt.debug('opened LLM span turnIndex=', turnIndex, 'model=', label);
   });
 
-  pi.on('message_end', async (raw) => {
+  safeOn(rt, 'message_end', async (raw) => {
     const event = raw as MessageEndEvent;
     const message = event?.message;
     if (!message || message.role !== 'assistant') return;
@@ -168,7 +169,7 @@ export function registerLlm(rt: Runtime): void {
     }
   });
 
-  pi.on('turn_end', async (raw) => {
+  safeOn(rt, 'turn_end', async (raw) => {
     const event = raw as TurnEndEvent;
     // Resolve to an actually-open LLM span. Prefer the event's index, but fall back
     // to the most-recently opened turn whenever that key is absent (payload omits a
@@ -191,7 +192,7 @@ export function registerLlm(rt: Runtime): void {
   });
 
   // P2-A — request messages as the LLM Input + message count; full payload opt-in.
-  pi.on('before_provider_request', async (raw) => {
+  safeOn(rt, 'before_provider_request', async (raw) => {
     const entry = currentLlm();
     if (!entry) return;
     const event = raw as BeforeProviderRequestEvent;
@@ -219,7 +220,7 @@ export function registerLlm(rt: Runtime): void {
   });
 
   // P2-B — HTTP status + rate-limit headers, plus error events.
-  pi.on('after_provider_response', async (raw) => {
+  safeOn(rt, 'after_provider_response', async (raw) => {
     const entry = currentLlm();
     if (!entry) return;
     const event = raw as AfterProviderResponseEvent;

@@ -17,3 +17,24 @@ export interface Runtime {
   state: SpanState;
   debug: (...args: unknown[]) => void;
 }
+
+// Register a pi event handler with top-level error containment. pi does not await or
+// catch a listener's return value, so an escaped throw (or a rejected promise from an
+// async handler) becomes an unhandled rejection that can destabilize the host — which
+// would break the extension's core contract that tracing never crashes pi. Every
+// handler is registered through this so a failure anywhere in a handler body is logged
+// and swallowed, not propagated. Individual span ops are still guarded (endSpan, etc.);
+// this is the backstop for everything between them.
+export function safeOn(
+  rt: Pick<Runtime, 'pi' | 'debug'>,
+  event: string,
+  handler: (raw: unknown, ctx?: unknown) => unknown | Promise<unknown>,
+): void {
+  rt.pi.on(event, async (raw: unknown, ctx: unknown) => {
+    try {
+      await handler(raw, ctx);
+    } catch (err) {
+      rt.debug(`handler ${event} threw`, err);
+    }
+  });
+}

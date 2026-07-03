@@ -82,79 +82,89 @@ export function registerCommand(rt: Runtime): void {
   pi.registerCommand('traceroot', {
     description: 'Traceroot tracing: status | open | flush | disable | enable',
     handler: async (args: string, ctx: CommandContext) => {
-      const sub = (args ?? '').trim().split(/\s+/)[0] || 'status';
-      const url = buildTraceUrl(config, state.sessionTraceId);
+      // The command handler runs inside pi's dispatch, which does not catch a rejected
+      // handler — an escaped error would become an unhandled rejection in the host.
+      // Contain it like the event handlers (safeOn) do.
+      try {
+        const sub = (args ?? '').trim().split(/\s+/)[0] || 'status';
+        const url = buildTraceUrl(config, state.sessionTraceId);
 
-      switch (sub) {
-        case 'status': {
-          const lines = [
-            `enabled=${config.enabled}`,
-            `project=${config.project}`,
-            `endpoint=${config.otlpEndpoint}`,
-            state.sessionDisabled ? 'session=disabled' : 'session=active',
-            url
-              ? `trace=${url}`
-              : state.sessionTraceId
-                ? `traceId=${state.sessionTraceId}`
-                : 'trace=none yet',
-          ];
-          ctx.ui.notify(`Traceroot — ${lines.join('  |  ')}`, 'info');
-          return;
-        }
-        case 'open': {
-          if (!url) {
+        switch (sub) {
+          case 'status': {
+            const lines = [
+              `enabled=${config.enabled}`,
+              `project=${config.project}`,
+              `endpoint=${config.otlpEndpoint}`,
+              state.sessionDisabled ? 'session=disabled' : 'session=active',
+              url
+                ? `trace=${url}`
+                : state.sessionTraceId
+                  ? `traceId=${state.sessionTraceId}`
+                  : 'trace=none yet',
+            ];
+            ctx.ui.notify(`Traceroot — ${lines.join('  |  ')}`, 'info');
+            return;
+          }
+          case 'open': {
+            if (!url) {
+              ctx.ui.notify(
+                'Traceroot: no trace URL yet (set TRACEROOT_PROJECT_ID and run a prompt).',
+                'warning',
+              );
+              return;
+            }
+            if (ctx.mode !== 'tui') {
+              ctx.ui.notify(`Traceroot trace: ${url}`, 'info');
+              return;
+            }
             ctx.ui.notify(
-              'Traceroot: no trace URL yet (set TRACEROOT_PROJECT_ID and run a prompt).',
-              'warning',
+              (await openInBrowser(url)) ? `Opening ${url}` : `Traceroot trace: ${url}`,
+              'info',
             );
             return;
           }
-          if (ctx.mode !== 'tui') {
-            ctx.ui.notify(`Traceroot trace: ${url}`, 'info');
+          case 'flush': {
+            if (state.providerShutdown) {
+              ctx.ui.notify(
+                'Traceroot: tracing has shut down for this session; nothing to flush.',
+                'warning',
+              );
+              return;
+            }
+            // Bounded like every other flush site: an unbounded forceFlush against a hung
+            // endpoint wedges this command for the exporter's full internal deadline.
+            const outcome = await flushWithTimeout(provider);
+            const note = flushNotification(outcome);
+            ctx.ui.notify(note.message, note.level);
             return;
           }
-          ctx.ui.notify(
-            (await openInBrowser(url)) ? `Opening ${url}` : `Traceroot trace: ${url}`,
-            'info',
-          );
-          return;
-        }
-        case 'flush': {
-          if (state.providerShutdown) {
+          case 'disable': {
+            // Finalize the in-flight tree now, then stop opening spans. Re-enabling
+            // starts a fresh session span (and a fresh trace) on the next prompt — the
+            // same begin-fresh-session step session_start runs.
+            beginNewSession(state, 'disabled');
+            state.sessionDisabled = true;
+            setStatus(ctx, config, STATUS_INACTIVE);
+            // The trace-URL widget advertises a trace that will receive no more spans;
+            // leaving it up directly contradicts the "disabled" notice below.
+            clearWidget(ctx);
+            ctx.ui.notify('Traceroot: tracing disabled for this session.', 'info');
+            return;
+          }
+          case 'enable': {
+            state.sessionDisabled = false;
+            setStatus(ctx, config, STATUS_ACTIVE);
+            ctx.ui.notify('Traceroot: tracing enabled for this session.', 'info');
+            return;
+          }
+          default:
             ctx.ui.notify(
-              'Traceroot: tracing has shut down for this session; nothing to flush.',
-              'warning',
+              'Traceroot: usage — /traceroot [status|open|flush|disable|enable]',
+              'info',
             );
-            return;
-          }
-          // Bounded like every other flush site: an unbounded forceFlush against a hung
-          // endpoint wedges this command for the exporter's full internal deadline.
-          const outcome = await flushWithTimeout(provider);
-          const note = flushNotification(outcome);
-          ctx.ui.notify(note.message, note.level);
-          return;
         }
-        case 'disable': {
-          // Finalize the in-flight tree now, then stop opening spans. Re-enabling
-          // starts a fresh session span (and a fresh trace) on the next prompt — the
-          // same begin-fresh-session step session_start runs.
-          beginNewSession(state, 'disabled');
-          state.sessionDisabled = true;
-          setStatus(ctx, config, STATUS_INACTIVE);
-          // The trace-URL widget advertises a trace that will receive no more spans;
-          // leaving it up directly contradicts the "disabled" notice below.
-          clearWidget(ctx);
-          ctx.ui.notify('Traceroot: tracing disabled for this session.', 'info');
-          return;
-        }
-        case 'enable': {
-          state.sessionDisabled = false;
-          setStatus(ctx, config, STATUS_ACTIVE);
-          ctx.ui.notify('Traceroot: tracing enabled for this session.', 'info');
-          return;
-        }
-        default:
-          ctx.ui.notify('Traceroot: usage — /traceroot [status|open|flush|disable|enable]', 'info');
+      } catch (err) {
+        rt.debug('command /traceroot threw', err);
       }
     },
   });

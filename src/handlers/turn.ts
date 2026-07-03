@@ -20,6 +20,7 @@ import { repoSlug, sessionAttributes } from '../attribution.ts';
 import { buildTraceUrl } from '../url.ts';
 import { setConfigIssue, setStatus, setTraceWidget, STATUS_ACTIVE } from '../ui.ts';
 import type { MetadataValue, TracerootPiConfig } from '../config.ts';
+import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type { BeforeAgentStartEvent, ExtensionContext, InputEvent } from '../types.ts';
 import type { SpanState } from '../state.ts';
@@ -164,15 +165,15 @@ function openSessionSpan(
 }
 
 export function registerTurn(rt: Runtime): void {
-  const { pi, state, config } = rt;
+  const { state, config } = rt;
 
-  pi.on('before_agent_start', async (raw) => {
+  safeOn(rt, 'before_agent_start', async (raw) => {
     const event = raw as BeforeAgentStartEvent;
     state.pendingPrompt = typeof event?.prompt === 'string' ? event.prompt : null;
   });
 
   // Buffer pi "input" event metadata; applied to the next turn span on agent_start.
-  pi.on('input', async (raw) => {
+  safeOn(rt, 'input', async (raw) => {
     if (state.sessionDisabled) return;
     const event = raw as InputEvent;
     state.pendingInput = {
@@ -186,7 +187,7 @@ export function registerTurn(rt: Runtime): void {
     };
   });
 
-  pi.on('agent_start', async (_raw, rawCtx) => {
+  safeOn(rt, 'agent_start', async (_raw, rawCtx) => {
     // Consume the buffered prompt up front so it never sticks to a later loop
     // (e.g. when this loop is skipped because tracing is disabled).
     const prompt = state.pendingPrompt;
@@ -232,7 +233,7 @@ export function registerTurn(rt: Runtime): void {
     rt.debug('opened turn span', state.promptIndex);
   });
 
-  pi.on('agent_end', async (raw) => {
+  safeOn(rt, 'agent_end', async (raw) => {
     // Close any LLM/tool spans an aborted turn left open, then the turn span.
     sweepTurnScoped(state);
     const turnSpan = state.turnSpan;

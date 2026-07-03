@@ -7,6 +7,7 @@ import { safeJsonTruncate } from '../json.ts';
 import { IO_LIMITS, renderToolResult } from '../content.ts';
 import { formatToolSpanName } from '../span-name.ts';
 import { activeParentCtx } from '../state.ts';
+import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type { ToolExecutionEndEvent, ToolExecutionStartEvent } from '../types.ts';
 
@@ -29,9 +30,9 @@ function toolErrorText(result: unknown, toolName: string): string {
 }
 
 export function registerTool(rt: Runtime): void {
-  const { pi, state, config } = rt;
+  const { state, config } = rt;
 
-  pi.on('tool_execution_start', async (raw) => {
+  safeOn(rt, 'tool_execution_start', async (raw) => {
     if (state.sessionDisabled) return;
     const event = raw as ToolExecutionStartEvent;
     const toolCallId = event?.toolCallId;
@@ -74,7 +75,7 @@ export function registerTool(rt: Runtime): void {
     rt.debug('opened tool span', toolName, toolCallId);
   });
 
-  pi.on('tool_execution_end', async (raw) => {
+  safeOn(rt, 'tool_execution_end', async (raw) => {
     const event = raw as ToolExecutionEndEvent;
     const toolCallId = event?.toolCallId;
     if (!toolCallId) return;

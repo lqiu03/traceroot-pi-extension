@@ -229,3 +229,19 @@ test('raceWithTimeout resolves to "timeout" when the work does not settle in tim
 test('raceWithTimeout resolves to the work value when it settles before the deadline', async () => {
   assert.equal(await raceWithTimeout(Promise.resolve('done'), 1000), 'done');
 });
+
+// ---------------------------------------------------------------------------
+// Handler error containment (safeOn) — tracing must never crash pi
+// ---------------------------------------------------------------------------
+
+test('a synchronously throwing provider in session_shutdown is contained, not propagated', async () => {
+  // A forceFlush that throws synchronously escapes flushWithTimeout's .then/.catch and
+  // would reject the handler promise — which pi does not catch, so it becomes an
+  // unhandled rejection in the host. safeOn must swallow it.
+  const { rt, handlers } = fakeRuntime();
+  (rt.provider as unknown as { forceFlush: () => Promise<void> }).forceFlush = () => {
+    throw new Error('sync explode');
+  };
+  registerSession(rt);
+  await assert.doesNotReject(fire(handlers, 'session_shutdown', { reason: 'reload' }, UI_CTX));
+});
