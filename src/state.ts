@@ -104,6 +104,16 @@ export function activeParentCtx(state: SpanState): Context | undefined {
     const llm = state.llmSpans.get(state.currentLlmTurnIndex);
     if (llm) return llm.ctx;
   }
+  return turnParentCtx(state);
+}
+
+// Parent context for an LLM span: the current turn, falling back to the session.
+// Deliberately distinct from activeParentCtx — it does NOT consider an open LLM span,
+// because an LLM span must never parent under another LLM span. Returns undefined when
+// neither turn nor session is open, so the caller skips the span rather than start a
+// detached root trace. Kept beside activeParentCtx so both parenting policies live in
+// one file with the state they read, not open-coded in the handlers.
+export function turnParentCtx(state: SpanState): Context | undefined {
   return state.turnCtx ?? state.sessionCtx ?? undefined;
 }
 

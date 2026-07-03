@@ -7,6 +7,7 @@ import {
   createSpanState,
   resetForNewSession,
   sweepTurnScoped,
+  turnParentCtx,
 } from './state.ts';
 
 const ended: string[] = [];
@@ -167,4 +168,25 @@ test('activeParentCtx falls back to turn then session', () => {
 
   state.turnCtx = null;
   assert.equal((activeParentCtx(state) as unknown as { __id: string }).__id, 'session');
+});
+
+test('turnParentCtx resolves to the turn even when an LLM span is open', () => {
+  // The distinction from activeParentCtx: an LLM span must never parent under another
+  // LLM span, so turnParentCtx ignores the open LLM span and uses the turn.
+  const state = createSpanState();
+  state.sessionCtx = fakeCtx('session');
+  const turnCtx = fakeCtx('turn');
+  state.turnCtx = turnCtx;
+  state.llmSpans.set(2, { span: fakeSpan('llm'), ctx: fakeCtx('llm'), turnIndex: 2 });
+  state.currentLlmTurnIndex = 2;
+  assert.equal(turnParentCtx(state), turnCtx, 'turnParentCtx ignores the LLM span');
+  assert.notEqual(activeParentCtx(state), turnCtx, 'activeParentCtx does prefer the LLM span');
+});
+
+test('turnParentCtx falls back to session, then undefined', () => {
+  const state = createSpanState();
+  state.sessionCtx = fakeCtx('session');
+  assert.equal((turnParentCtx(state) as unknown as { __id: string }).__id, 'session');
+  state.sessionCtx = null;
+  assert.equal(turnParentCtx(state), undefined, 'undefined when neither turn nor session is open');
 });

@@ -6,7 +6,7 @@ import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { addEvent, endSpan, setAttr } from '../attributes.ts';
 import { IO_LIMITS, renderMessageContent } from '../content.ts';
 import { safeJsonTruncate, safeSlice } from '../json.ts';
-import type { LlmEntry } from '../state.ts';
+import { turnParentCtx, type LlmEntry } from '../state.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
 import type {
@@ -70,7 +70,7 @@ export function registerLlm(rt: Runtime): void {
     // — e.g. between a /traceroot enable and the next prompt. Opening an LLM span with no
     // parent would start a brand-new root trace and split the agent loop, so skip until
     // the session span exists (agent_start opens it and sets these contexts).
-    const parentCtx = state.turnCtx ?? state.sessionCtx;
+    const parentCtx = turnParentCtx(state);
     if (!parentCtx) {
       rt.debug('turn_start with no session/turn context; skipping LLM span');
       return;
