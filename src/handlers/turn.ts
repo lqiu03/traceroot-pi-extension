@@ -170,7 +170,9 @@ function openSessionSpan(
   // On a reload/resume continuation, keep pointing the persisted file at the
   // original root so repeated reloads stay siblings under it, not a deep chain.
   const persistedRoot = state.resumeFrom ?? { traceId: sc.traceId, spanId: sc.spanId };
-  persistSessionTrace(config.stateDir, state.sessionFile, persistedRoot);
+  // Fire-and-forget: keep the write off the first-prompt tick (a fork/reload reads it
+  // back only in a later session).
+  void persistSessionTrace(config.stateDir, state.sessionFile, persistedRoot);
   debug('opened session span trace=', sc.traceId, parentCtx ? '(continued)' : '(root)');
 }
 

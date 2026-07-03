@@ -1,8 +1,8 @@
 // Persist a session's root SpanContext so a later forked session can link back to
 // it (P2-F). Keyed by the session file's basename under the configured state dir.
 // All operations are best-effort; failure degrades to "no link", never an error.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { readdir, stat, unlink } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { createHash } from 'node:crypto';
 import { isSpanId, isTraceId } from './hex.ts';
@@ -65,22 +65,27 @@ export async function pruneStaleSessionTraces(
   }
 }
 
-export function persistSessionTrace(
+// Persist the session→trace link. Async and best-effort: the caller fires this and
+// does not await, keeping the mkdir/write/rename off the first-prompt (time-to-first
+// token) tick — the fork/reload that reads it back happens in a later session, so the
+// ordering is safe. Returns the promise only so tests (and any future caller that
+// needs durability) can await completion.
+export async function persistSessionTrace(
   stateDir: string,
   sessionFile: string | null,
   trace: PersistedTrace,
-): void {
+): Promise<void> {
   try {
     if (!sessionFile) return;
-    mkdirSync(stateDir, { recursive: true });
+    await mkdir(stateDir, { recursive: true });
     // Write atomically (temp file + rename) so a concurrently-forking session never
     // reads a half-written file.
     const target = fileFor(stateDir, sessionFile);
     const tmp = `${target}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(trace), 'utf8');
-    renameSync(tmp, target);
-    // Opportunistic GC off the hot path: without it the state dir accrues one tiny
-    // file per session for the lifetime of the install.
+    await writeFile(tmp, JSON.stringify(trace), 'utf8');
+    await rename(tmp, target);
+    // Opportunistic GC: without it the state dir accrues one tiny file per session for
+    // the lifetime of the install.
     if (!prunedDirs.has(stateDir)) {
       prunedDirs.add(stateDir);
       void pruneStaleSessionTraces(stateDir);

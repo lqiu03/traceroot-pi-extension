@@ -7,57 +7,59 @@ import { persistSessionTrace, pruneStaleSessionTraces, readSessionTrace } from '
 
 const VALID = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) };
 
-function withTempDir(fn: (dir: string) => void): void {
+// persistSessionTrace is async (fire-and-forget in production); tests await it so the
+// immediate read-back is deterministic.
+async function withTempDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
   try {
-    fn(dir);
+    await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-test('persist + read round-trips a valid trace', () => {
-  withTempDir((dir) => {
+test('persist + read round-trips a valid trace', async () => {
+  await withTempDir(async (dir) => {
     const sessionFile = '/some/dir/session-abc.jsonl';
-    persistSessionTrace(dir, sessionFile, VALID);
+    await persistSessionTrace(dir, sessionFile, VALID);
     assert.deepEqual(readSessionTrace(dir, sessionFile), VALID);
   });
 });
 
-test('rejects ids that are not well-formed hex SpanContext ids', () => {
-  withTempDir((dir) => {
+test('rejects ids that are not well-formed hex SpanContext ids', async () => {
+  await withTempDir(async (dir) => {
     const sf = '/d/session-bad.jsonl';
-    persistSessionTrace(dir, sf, { traceId: 'xyz', spanId: VALID.spanId }); // non-hex / short
+    await persistSessionTrace(dir, sf, { traceId: 'xyz', spanId: VALID.spanId }); // non-hex / short
     assert.equal(readSessionTrace(dir, sf), null);
-    persistSessionTrace(dir, sf, { traceId: VALID.traceId, spanId: 'tooShort' });
+    await persistSessionTrace(dir, sf, { traceId: VALID.traceId, spanId: 'tooShort' });
     assert.equal(readSessionTrace(dir, sf), null);
-    persistSessionTrace(dir, sf, { traceId: 'A'.repeat(32), spanId: VALID.spanId }); // uppercase
+    await persistSessionTrace(dir, sf, { traceId: 'A'.repeat(32), spanId: VALID.spanId }); // uppercase
     assert.equal(readSessionTrace(dir, sf), null);
   });
 });
 
-test('returns null when no persisted file exists', () => {
-  withTempDir((dir) => {
+test('returns null when no persisted file exists', async () => {
+  await withTempDir((dir) => {
     assert.equal(readSessionTrace(dir, '/d/missing.jsonl'), null);
   });
 });
 
-test('same basename in different directories does not cross-link (keyed by full path)', () => {
-  withTempDir((dir) => {
+test('same basename in different directories does not cross-link (keyed by full path)', async () => {
+  await withTempDir(async (dir) => {
     const a = '/projects/alpha/session.jsonl';
     const b = '/projects/beta/session.jsonl'; // same basename, different directory
     const traceA = { traceId: 'a'.repeat(32), spanId: 'a'.repeat(16) };
     const traceB = { traceId: 'b'.repeat(32), spanId: 'b'.repeat(16) };
-    persistSessionTrace(dir, a, traceA);
-    persistSessionTrace(dir, b, traceB);
+    await persistSessionTrace(dir, a, traceA);
+    await persistSessionTrace(dir, b, traceB);
     assert.deepEqual(readSessionTrace(dir, a), traceA, 'session a keeps its own trace');
     assert.deepEqual(readSessionTrace(dir, b), traceB, 'session b is not overwritten by a');
   });
 });
 
-test('a null session file is a no-op, not an error', () => {
-  withTempDir((dir) => {
-    persistSessionTrace(dir, null, VALID);
+test('a null session file is a no-op, not an error', async () => {
+  await withTempDir(async (dir) => {
+    await persistSessionTrace(dir, null, VALID);
     assert.equal(readSessionTrace(dir, null), null);
   });
 });
@@ -81,10 +83,10 @@ test('pruneStaleSessionTraces deletes old entries and crashed .tmp files, keeps 
   try {
     const stale = '/d/stale.jsonl';
     const fresh = '/d/fresh.jsonl';
-    persistSessionTrace(dir, stale, VALID);
+    await persistSessionTrace(dir, stale, VALID);
     const staleEntry = readdirSync(dir).find((name) => name.endsWith('.json'));
     assert.ok(staleEntry, 'the stale session produced an entry file');
-    persistSessionTrace(dir, fresh, VALID);
+    await persistSessionTrace(dir, fresh, VALID);
     // A crashed atomic write leaves a file named like a real temp: <32hex>.json.<pid>.tmp.
     const staleTmp = join(dir, `${HEX32}.json.99999.tmp`);
     writeFileSync(staleTmp, 'partial');
@@ -134,7 +136,7 @@ test('equivalent spellings of a session-file path link to the same trace', async
   // and a later read/fork path must not lose the parent link.
   const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
   try {
-    persistSessionTrace(dir, '/projects/app/sessions/current.jsonl', VALID);
+    await persistSessionTrace(dir, '/projects/app/sessions/current.jsonl', VALID);
     // Same file, spelled with a redundant ./.. detour and a doubled separator.
     assert.deepEqual(
       readSessionTrace(dir, '/projects/app/other/../sessions//current.jsonl'),
@@ -150,7 +152,7 @@ test('pruneStaleSessionTraces keeps entries newer than the cutoff', async () => 
   const dir = mkdtempSync(join(tmpdir(), 'tr-fork-'));
   try {
     const recent = '/d/recent.jsonl';
-    persistSessionTrace(dir, recent, VALID);
+    await persistSessionTrace(dir, recent, VALID);
     const entry = readdirSync(dir).find((name) => name.endsWith('.json'));
     assert.ok(entry);
     ageFile(join(dir, entry), 5 * DAY_MS); // well inside the 30-day window
