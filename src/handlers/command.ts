@@ -162,6 +162,13 @@ export function registerCommand(rt: Runtime): void {
             return;
           }
           case 'enable': {
+            if (state.providerShutdown) {
+              ctx.ui.notify(
+                'Traceroot: tracing has shut down for this session; cannot enable.',
+                'warning',
+              );
+              return;
+            }
             state.sessionDisabled = false;
             setStatus(ctx, config, STATUS_ACTIVE);
             ctx.ui.notify('Traceroot: tracing enabled for this session.', 'info');
