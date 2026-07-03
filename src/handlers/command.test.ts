@@ -135,6 +135,21 @@ test('/traceroot status reports config and session state', async () => {
   assert.match(status, /session=active/);
 });
 
+test('/traceroot open distinguishes a malformed projectId from an unset one', async () => {
+  const { rt, run, notifications } = commandRuntime();
+  rt.config.projectId = 'my-project'; // set, but not a UUID
+  rt.state.sessionTraceId = 't'.repeat(32);
+  registerCommand(rt);
+  await run('open');
+  const msg = notifications.at(-1)?.message ?? '';
+  assert.match(
+    msg,
+    /not a valid UUID/i,
+    'tells the user the format is wrong, not that it is unset',
+  );
+  assert.doesNotMatch(msg, /set TRACEROOT_PROJECT_ID and run/i);
+});
+
 test('/traceroot status redacts credentials embedded in the endpoint', async () => {
   const { rt, run, notifications } = commandRuntime();
   rt.config.otlpEndpoint = 'https://svc:topsecret@collector.internal:4318/v1/traces';

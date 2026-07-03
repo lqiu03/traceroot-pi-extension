@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isProjectUuid } from './hex.ts';
 
 export interface ConfigIssue {
   path: string;
@@ -317,6 +318,14 @@ export function validateConfig(config: TracerootPiConfig): ConfigIssue[] {
     issues.push({
       path: 'otlpEndpoint',
       message: 'endpoint is not https; the token will be sent in cleartext',
+      severity: 'warning',
+    });
+  }
+  if (config.enabled && config.projectId && !isProjectUuid(config.projectId)) {
+    issues.push({
+      path: 'projectId',
+      message:
+        'projectId (TRACEROOT_PROJECT_ID) is set but is not a UUID; trace-link URLs will be unavailable',
       severity: 'warning',
     });
   }

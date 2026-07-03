@@ -240,6 +240,29 @@ test('validateConfig warns on a non-https cloud endpoint', () => {
   assert.ok(issues.some((i) => i.path === 'otlpEndpoint' && i.severity === 'warning'));
 });
 
+test('validateConfig warns when a set projectId is not a UUID', () => {
+  // A set-but-non-UUID projectId silently yields no trace URL; without a warning the
+  // user is left guessing why (and /traceroot open used to tell them it was "unset").
+  const bad = validateConfig(resolve({ enabled: true, token: 't', projectId: 'my-project' }));
+  assert.ok(bad.some((i) => i.path === 'projectId' && i.severity === 'warning'));
+
+  const good = validateConfig(
+    resolve({ enabled: true, token: 't', projectId: '123e4567-e89b-12d3-a456-426614174000' }),
+  );
+  assert.equal(
+    good.some((i) => i.path === 'projectId'),
+    false,
+    'a UUID projectId is clean',
+  );
+
+  const disabled = validateConfig(resolve({ enabled: false, projectId: 'my-project' }));
+  assert.equal(
+    disabled.some((i) => i.path === 'projectId'),
+    false,
+    'no projectId noise when tracing is disabled',
+  );
+});
+
 test('collectEnvIssues warns on a set-but-unrecognized boolean and on malformed metadata', () => {
   const saved = { ...process.env };
   try {

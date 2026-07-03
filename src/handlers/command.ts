@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { flushWithTimeout, type FlushOutcome } from './session.ts';
 import { beginNewSession } from '../state.ts';
 import { buildTraceUrl, redactUrlUserinfo } from '../url.ts';
+import { isProjectUuid } from '../hex.ts';
 import { clearWidget, setStatus, STATUS_ACTIVE, STATUS_INACTIVE } from '../ui.ts';
 import type { Runtime } from '../runtime.ts';
 import type { CommandContext } from '../types.ts';
@@ -109,8 +110,13 @@ export function registerCommand(rt: Runtime): void {
           }
           case 'open': {
             if (!url) {
+              // Distinguish "set but malformed" from "unset" — telling a user to set a
+              // variable they already set (just not as a UUID) sends them the wrong way.
+              const badProjectId = config.projectId && !isProjectUuid(config.projectId);
               ctx.ui.notify(
-                'Traceroot: no trace URL yet (set TRACEROOT_PROJECT_ID and run a prompt).',
+                badProjectId
+                  ? 'Traceroot: TRACEROOT_PROJECT_ID is set but is not a valid UUID; no trace URL.'
+                  : 'Traceroot: no trace URL yet (set TRACEROOT_PROJECT_ID and run a prompt).',
                 'warning',
               );
               return;
