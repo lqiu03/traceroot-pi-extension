@@ -259,3 +259,33 @@ test('tool error status message stays generic (no content leak) when tool-IO cap
     'result content must not leak into the status message',
   );
 });
+
+// Object-result precedence (previously unpinned): `error` wins and is terminal, so a blank
+// error yields the generic fallback rather than being shadowed by `message`; `message` is
+// used only when there is no string `error`.
+async function toolErrorStatus(result: unknown): Promise<string | undefined> {
+  const { rt, handlers, spans } = fakeRuntime({ captureToolIo: true });
+  registerTool(rt);
+  await fire(handlers, 'tool_execution_start', { toolCallId: 'c1', toolName: 'bash', args: {} });
+  await fire(handlers, 'tool_execution_end', {
+    toolCallId: 'c1',
+    toolName: 'bash',
+    result,
+    isError: true,
+  });
+  return firstSpan(spans).status?.message;
+}
+
+test('an object result uses its error field for the status message', async () => {
+  assert.equal(await toolErrorStatus({ error: 'disk full' }), 'disk full');
+});
+
+test('an object result with no error field falls back to its message field', async () => {
+  assert.equal(await toolErrorStatus({ message: 'timed out' }), 'timed out');
+});
+
+test('a blank error field is not shadowed by message (generic fallback, precedence preserved)', async () => {
+  // The prior toolErrorText committed to `error` once it was a string; a blank error then
+  // fell through to the generic fallback rather than borrowing `message`. Pin that.
+  assert.equal(await toolErrorStatus({ error: '   ', message: 'boom' }), 'bash failed');
+});

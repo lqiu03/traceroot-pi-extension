@@ -20,7 +20,11 @@ function toolErrorDetail(result: unknown): string | undefined {
   if (typeof result === 'string' && result.trim()) return result;
   if (result && typeof result === 'object') {
     const record = result as { error?: unknown; message?: unknown };
-    if (typeof record.error === 'string' && record.error.trim()) return record.error;
+    // `error` takes precedence and is TERMINAL once it is a string: a blank error is not
+    // shadowed by a valid `message` (a blank error yields the generic fallback). `message`
+    // is consulted only when `error` is absent or not a string. This preserves the exact
+    // precedence of the prior toolErrorText.
+    if (typeof record.error === 'string') return record.error.trim() ? record.error : undefined;
     if (typeof record.message === 'string' && record.message.trim()) return record.message;
   }
   return undefined;
