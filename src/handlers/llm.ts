@@ -5,7 +5,7 @@
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { addEvent, endSpan, setAttr } from '../attributes.ts';
 import { IO_LIMITS, renderMessageContent } from '../content.ts';
-import { boundedJsonHead, safeSlice } from '../json.ts';
+import { safeJsonTruncate, safeSlice } from '../json.ts';
 import type { LlmEntry } from '../state.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -203,18 +203,15 @@ export function registerLlm(rt: Runtime): void {
       // The request messages are the full prior conversation (system prompt, earlier
       // turns, tool results, file content) — high-PII content. Gate the Input panel
       // behind the same opt-in that governs full payloads; default is count-only.
-      // boundedJsonHead stops serializing at the char budget: this runs once per LLM
-      // call on a payload that grows to megabytes late in a session, and stringifying
-      // all of it to keep 8-16KB was measurable event-loop time per prompt.
       if (config.captureFullPayload) {
-        setAttr(entry.span, 'traceroot.span.input', boundedJsonHead(messages, IO_LIMITS.llmInput));
+        setAttr(entry.span, 'traceroot.span.input', safeJsonTruncate(messages, IO_LIMITS.llmInput));
       }
     }
     if (config.captureFullPayload) {
       setAttr(
         entry.span,
         'traceroot.pi.full_request_payload',
-        boundedJsonHead(event?.payload, PAYLOAD_MAX),
+        safeJsonTruncate(event?.payload, PAYLOAD_MAX),
       );
     }
   });
