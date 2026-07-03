@@ -1,7 +1,9 @@
-// Guarded attribute setters. OpenTelemetry only accepts primitive attribute
-// values (string | number | boolean) or homogeneous arrays of them. These helpers
-// drop null/undefined and never pass objects to setAttribute, which would be
-// silently dropped (or warned about) by the SDK.
+// Guarded attribute setters. OpenTelemetry accepts primitive attribute values or
+// homogeneous arrays of them, but this extension only ever emits scalars, so these
+// helpers intentionally accept just string | number | boolean: they drop null/undefined
+// and never pass objects or arrays to setAttribute (which the SDK would silently drop or
+// warn about). If an array attribute is ever needed, widen AttrValue and handle arrays
+// in setAttr/addEvent rather than bypassing these helpers.
 import type { Span } from '@opentelemetry/api';
 
 export type AttrValue = string | number | boolean;
