@@ -5,12 +5,14 @@ on:
     types: [published]
 
 jobs:
-  # Triggered by tags like: v0.1.0, v1.0.0
-  publish:
+  # Build, verify the tag, typecheck, and test with NO id-token in scope. `pnpm check`
+  # imports and executes dependency code, so it must run in a job that cannot mint an OIDC
+  # token — GitHub Actions permissions are job-level, not step-level, so isolating this in
+  # its own job is the only way to keep id-token out of scope while third-party code runs.
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # required for npm provenance attestation via OIDC
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -19,7 +21,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
           cache: pnpm
 
       - name: Install dependencies
@@ -28,7 +29,7 @@ jobs:
       # Fail fast — verify tag matches package.json before running checks.
       # The tag name is passed via env, NOT interpolated into the script: a release
       # tag can contain shell metacharacters (backticks, $(), ;), and textual
-      # interpolation would execute them in this job — which holds NPM_TOKEN.
+      # interpolation would execute them in this job.
       - name: Verify release tag matches package version
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -46,6 +47,30 @@ jobs:
 
       - name: Format check
         run: pnpm format:check
+
+  # Publish with id-token: write in scope ONLY here. This job runs no third-party code
+  # while the token is available: install uses --ignore-scripts (no lifecycle scripts) and
+  # there is no `pnpm check`/test step to import dependency modules, so nothing between the
+  # token grant and `pnpm publish` can read ACTIONS_ID_TOKEN_REQUEST_* and mint a token.
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance attestation via OIDC
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Publish @traceroot-ai/pi-extension
         run: pnpm publish --provenance --access public --no-git-checks
