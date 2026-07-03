@@ -181,7 +181,14 @@ export function registerCommand(rt: Runtime): void {
         } catch {
           /* ui unavailable in this mode */
         }
-        rt.debug('command /traceroot threw', err);
+        // Guard rt.debug too: a command handler is registered via pi.registerCommand, not
+        // through safeOn, so it has no outer backstop — a throwing debug sink here would
+        // escape into the host. safeOn wraps rt.debug for exactly this reason; match it.
+        try {
+          rt.debug('command /traceroot threw', err);
+        } catch {
+          /* logging the failure must not itself crash the host */
+        }
       }
     },
   });
