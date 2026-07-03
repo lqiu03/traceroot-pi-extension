@@ -12,7 +12,7 @@ import { createFileLogger } from './logger.ts';
 import { initTracing } from './provider.ts';
 import { captureProjectLocalBaseline } from './project-config.ts';
 import { closeAllOpenSpans, createSpanState } from './state.ts';
-import { FLUSH_TIMEOUT_MS, raceWithTimeout, registerSession } from './handlers/session.ts';
+import { registerSession, shutdownProviderInBackground } from './handlers/session.ts';
 import { registerTurn } from './handlers/turn.ts';
 import { registerLlm } from './handlers/llm.ts';
 import { registerTool } from './handlers/tool.ts';
@@ -32,6 +32,12 @@ function warn(message: string, err?: unknown): void {
 // CURRENT state/provider — a module-level "register once" flag would instead leave the
 // stale first init's provider as the flush target.
 let activeExitListener: (() => void) | undefined;
+
+// The provider from the most recent init. On a re-init we flush and shut down the prior
+// one before the new one takes over: its beforeExit listener is removed below, so nothing
+// else would ever drain its queued spans or release its exporter's keep-alive socket —
+// leaking a provider/exporter and losing buffered spans on every reload.
+let activeProvider: { shutdown: () => Promise<void> } | undefined;
 
 export default async function (pi: ExtensionAPI): Promise<void> {
   let bundle;
@@ -82,6 +88,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     return;
   }
 
+  // Re-init: tear down the previous provider so its spans are flushed and its exporter
+  // socket released before this one replaces it as the exit-flush target. Bounded so a
+  // hung endpoint cannot stall the reload; the old provider's timer is unref'd regardless.
+  if (activeProvider && activeProvider !== tracing.provider) {
+    shutdownProviderInBackground(activeProvider);
+  }
+  activeProvider = tracing.provider;
+
   const state = createSpanState();
   const rt: Runtime = {
     pi,
@@ -131,13 +145,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     try {
       if (state.providerShutdown) return;
       state.providerShutdown = true;
-      closeAllOpenSpans(state, 'process-exit');
+      // Record the session Output panel like every other close path (session_shutdown,
+      // /traceroot disable); the abnormal-exit fallback previously dropped it.
+      closeAllOpenSpans(state, 'process-exit', state.lastAssistantText);
       // The pending shutdown keeps the loop alive until it settles; the exporter's
-      // request deadline and this race both bound that, so exit cannot hang.
-      void raceWithTimeout(
-        tracing.provider.shutdown().catch(() => undefined),
-        FLUSH_TIMEOUT_MS,
-      );
+      // request deadline and the helper's race both bound that, so exit cannot hang.
+      shutdownProviderInBackground(tracing.provider);
     } catch {
       /* best-effort: a fallback flush must never crash the exiting host */
     }
