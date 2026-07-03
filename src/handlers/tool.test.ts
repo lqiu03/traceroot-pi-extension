@@ -119,7 +119,12 @@ test('tool name, id, error state, and duration are always recorded', async () =>
   assert.equal(span.attrs['gen_ai.tool.name'], 'bash');
   assert.equal(span.attrs['gen_ai.tool.call.id'], 'a');
   assert.equal(span.attrs['traceroot.pi.tool_is_error'], false);
-  assert.equal(typeof span.attrs['traceroot.pi.tool_duration_ms'], 'number');
+  // Duration is a rounded, non-negative integer. It is derived from the monotonic
+  // performance.now() clock, so it can never be negative — which a Date.now() delta
+  // could become under an NTP step or manual clock change mid-tool.
+  const duration = span.attrs['traceroot.pi.tool_duration_ms'];
+  assert.equal(typeof duration, 'number');
+  assert.ok(Number.isInteger(duration) && (duration as number) >= 0, `duration >= 0: ${duration}`);
 });
 
 test('tool argument and result bodies are captured by default and omitted when captureToolIo is off', async () => {

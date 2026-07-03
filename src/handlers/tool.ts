@@ -1,6 +1,7 @@
 // Tool spans, parallel-safe. Keyed by toolCallId (never a single "current tool"),
 // parented under the active LLM span. pi runs tools concurrently and their
 // start/end events interleave, so position-based tracking would orphan spans.
+import { performance } from 'node:perf_hooks';
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { endSpan, setAttr } from '../attributes.ts';
 import { safeJsonTruncate, safeSlice } from '../json.ts';
@@ -73,7 +74,9 @@ export function registerTool(rt: Runtime): void {
       );
     }
 
-    state.toolSpans.set(toolCallId, { span, startTime: Date.now(), toolName });
+    // performance.now() is monotonic: unlike Date.now(), an NTP step or manual clock
+    // change during a long-running tool cannot make the duration negative or inflated.
+    state.toolSpans.set(toolCallId, { span, startTime: performance.now(), toolName });
     rt.debug('opened tool span', toolName, toolCallId);
   });
 
@@ -100,7 +103,11 @@ export function registerTool(rt: Runtime): void {
       }
       const isError = event?.isError === true;
       setAttr(entry.span, 'traceroot.pi.tool_is_error', isError);
-      setAttr(entry.span, 'traceroot.pi.tool_duration_ms', Date.now() - entry.startTime);
+      setAttr(
+        entry.span,
+        'traceroot.pi.tool_duration_ms',
+        Math.round(performance.now() - entry.startTime),
+      );
       if (isError) {
         // Surface tool failures as a queryable OTel error status, not only a boolean.
         // Keep the message generic when content capture is off so it cannot leak result
