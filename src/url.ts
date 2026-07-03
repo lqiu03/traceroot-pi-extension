@@ -18,9 +18,14 @@ export function buildTraceUrl(config: TracerootPiConfig, traceId: string | null)
   return `${base}/projects/${encodeURIComponent(config.projectId)}/traces?traceId=${encodeURIComponent(traceId)}`;
 }
 
-// Query-parameter names whose values are credential-like (optionally x- prefixed).
+// Query-parameter names whose values are credential-like. Matched as a bounded segment
+// (delimited by start/end or a - / _ separator) ANYWHERE in the name, not as a whole-name
+// allowlist, so vendor-prefixed variants (X-Amz-Signature, my-api-key, request_signature)
+// are masked too. The segment boundaries keep benign names that merely contain a keyword
+// as a substring (keyword, monkey, design) from being redacted. For a redactor, biasing
+// toward over-masking a benign param is far safer than leaking a real secret.
 const CREDENTIAL_QUERY_PARAM =
-  /^(x[-_]?)?(token|api[-_]?key|access[-_]?token|secret|password|passwd|pwd|auth|key|signature|sig)$/i;
+  /(^|[-_])(x[-_]?)?(api[-_]?key|access[-_]?token|token|secret|password|passwd|pwd|auth|credential|signature|sig|key)([-_]|$)/i;
 
 // Redact credentials from a URL for display, so a secret embedded in an endpoint is not
 // shown in /traceroot status output, screenshots, log files, or shared terminals. Covers

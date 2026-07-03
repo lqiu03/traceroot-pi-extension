@@ -49,6 +49,28 @@ test('redactUrlCredentials masks credential-like query parameters, keeps benign 
   );
 });
 
+test('redactUrlCredentials masks vendor-prefixed credential params but not benign look-alikes', () => {
+  // Prefixed / vendor-specific variants must still be masked (a segment-bounded match),
+  // or a real presigned-URL secret leaks in status output or the debug log.
+  for (const key of [
+    'X-Amz-Signature',
+    'X-Amz-Credential',
+    'my-api-key',
+    'request_signature',
+    'x-api-key',
+  ]) {
+    const out = redactUrlCredentials(`https://host/p?${key}=SECRET123&keep=1`);
+    assert.ok(!out.includes('SECRET123'), `${key} value is masked`);
+    assert.match(out, /keep=1/, 'a benign param is preserved');
+  }
+  // Benign names that merely contain a keyword as an UNBOUNDED substring must not be
+  // redacted — the segment boundaries prevent that false positive.
+  for (const key of ['keyword', 'monkey', 'design']) {
+    const out = redactUrlCredentials(`https://host/p?${key}=hello`);
+    assert.match(out, new RegExp(`${key}=hello`), `${key} is not a false positive`);
+  }
+});
+
 const UUID = '123e4567-e89b-12d3-a456-426614174000';
 
 test('builds a deep link when a UUID projectId and traceId are present', () => {
