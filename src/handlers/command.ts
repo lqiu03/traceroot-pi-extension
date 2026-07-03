@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process';
 import { flushWithTimeout, type FlushOutcome } from './session.ts';
 import { beginNewSession } from '../state.ts';
-import { buildTraceUrl, redactUrlUserinfo } from '../url.ts';
+import { buildTraceUrl, redactUrlCredentials } from '../url.ts';
 import { isProjectUuid } from '../hex.ts';
 import { clearWidget, setStatus, STATUS_ACTIVE, STATUS_INACTIVE } from '../ui.ts';
 import type { Runtime } from '../runtime.ts';
@@ -99,7 +99,7 @@ export function registerCommand(rt: Runtime): void {
               `project=${config.project}`,
               // Redact any embedded credentials; the host/path stays visible for
               // troubleshooting.
-              `endpoint=${redactUrlUserinfo(config.otlpEndpoint)}`,
+              `endpoint=${redactUrlCredentials(config.otlpEndpoint)}`,
               state.sessionDisabled ? 'session=disabled' : 'session=active',
               url
                 ? `trace=${url}`

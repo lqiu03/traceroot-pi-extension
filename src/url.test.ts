@@ -1,36 +1,52 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { resolve } from './config.ts';
-import { buildTraceUrl, redactUrlUserinfo } from './url.ts';
+import { buildTraceUrl, redactUrlCredentials } from './url.ts';
 
-test('redactUrlUserinfo strips credentials but keeps host and path', () => {
+test('redactUrlCredentials strips credentials but keeps host and path', () => {
   assert.equal(
-    redactUrlUserinfo('https://user:s3cret@collector.internal/v1/traces'),
+    redactUrlCredentials('https://user:s3cret@collector.internal/v1/traces'),
     'https://collector.internal/v1/traces',
   );
-  assert.equal(redactUrlUserinfo('https://token@host/x'), 'https://host/x');
+  assert.equal(redactUrlCredentials('https://token@host/x'), 'https://host/x');
   // No userinfo: returned unchanged (no spurious rewriting).
   assert.equal(
-    redactUrlUserinfo('https://app.traceroot.ai/api/v1/public/traces'),
+    redactUrlCredentials('https://app.traceroot.ai/api/v1/public/traces'),
     'https://app.traceroot.ai/api/v1/public/traces',
   );
   // Non-URL value: nothing to redact, returned as-is.
-  assert.equal(redactUrlUserinfo('not a url'), 'not a url');
+  assert.equal(redactUrlCredentials('not a url'), 'not a url');
 });
 
-test('redactUrlUserinfo does not leak the password anywhere in its output', () => {
-  const out = redactUrlUserinfo('https://admin:hunter2@10.0.0.5:4318/v1/traces');
+test('redactUrlCredentials does not leak the password anywhere in its output', () => {
+  const out = redactUrlCredentials('https://admin:hunter2@10.0.0.5:4318/v1/traces');
   assert.ok(!out.includes('hunter2'), 'password absent');
   assert.ok(!out.includes('admin'), 'username absent');
   assert.match(out, /10\.0\.0\.5:4318\/v1\/traces/, 'host and path preserved for troubleshooting');
 });
 
-test('redactUrlUserinfo strips a password even when there is no username', () => {
+test('redactUrlCredentials strips a password even when there is no username', () => {
   // A `:secret@host` form (empty username) must still be redacted — a naive
   // `if (!url.username)` guard would leak it.
-  const out = redactUrlUserinfo('https://:s3cret@collector.internal/x');
+  const out = redactUrlCredentials('https://:s3cret@collector.internal/x');
   assert.ok(!out.includes('s3cret'), 'password absent');
   assert.equal(out, 'https://collector.internal/x');
+});
+
+test('redactUrlCredentials masks credential-like query parameters, keeps benign ones', () => {
+  // Some collectors accept a token via the query string; masking only userinfo would
+  // still leak it in status output / the debug log.
+  for (const key of ['token', 'api_key', 'apikey', 'access_token', 'x-api-key', 'secret', 'key']) {
+    const out = redactUrlCredentials(`https://host/traces?${key}=SECRET123&project=p`);
+    assert.ok(!out.includes('SECRET123'), `${key} value is masked`);
+    assert.match(out, /project=p/, 'a non-credential param is preserved');
+    assert.match(out, new RegExp(`${key}=REDACTED`, 'i'), `${key} shape is kept`);
+  }
+  // A URL with neither userinfo nor credential params is returned unchanged.
+  assert.equal(
+    redactUrlCredentials('https://host/traces?traceId=abc'),
+    'https://host/traces?traceId=abc',
+  );
 });
 
 const UUID = '123e4567-e89b-12d3-a456-426614174000';

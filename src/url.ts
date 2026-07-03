@@ -18,18 +18,32 @@ export function buildTraceUrl(config: TracerootPiConfig, traceId: string | null)
   return `${base}/projects/${encodeURIComponent(config.projectId)}/traces?traceId=${encodeURIComponent(traceId)}`;
 }
 
-// Strip any userinfo (user:pass@) from a URL for display, so a credential embedded in
-// an endpoint (e.g. TRACEROOT_OTLP_ENDPOINT=https://user:secret@host/...) is not shown
-// in /traceroot status output, screenshots, or shared terminals. The host/path is kept
-// — that is the point of the status line. A value that does not parse as a URL is
+// Query-parameter names whose values are credential-like (optionally x- prefixed).
+const CREDENTIAL_QUERY_PARAM =
+  /^(x[-_]?)?(token|api[-_]?key|access[-_]?token|secret|password|passwd|pwd|auth|key|signature|sig)$/i;
+
+// Redact credentials from a URL for display, so a secret embedded in an endpoint is not
+// shown in /traceroot status output, screenshots, log files, or shared terminals. Covers
+// both standard locations: userinfo (https://user:secret@host/...) and credential-like
+// query parameters (https://host/traces?token=secret). The host/path/other params are
+// kept — that is the point of the status line. A value that does not parse as a URL is
 // returned unchanged (nothing to redact).
-export function redactUrlUserinfo(raw: string): string {
+export function redactUrlCredentials(raw: string): string {
   try {
     const url = new URL(raw);
-    if (!url.username && !url.password) return raw;
-    url.username = '';
-    url.password = '';
-    return url.toString();
+    let changed = false;
+    if (url.username || url.password) {
+      url.username = '';
+      url.password = '';
+      changed = true;
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (CREDENTIAL_QUERY_PARAM.test(key)) {
+        url.searchParams.set(key, 'REDACTED');
+        changed = true;
+      }
+    }
+    return changed ? url.toString() : raw;
   } catch {
     return raw;
   }

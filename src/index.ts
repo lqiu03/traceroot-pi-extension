@@ -7,7 +7,7 @@
 import { join } from 'node:path';
 import { loadConfig } from './config.ts';
 import { safeJsonTruncate } from './json.ts';
-import { redactUrlUserinfo } from './url.ts';
+import { redactUrlCredentials } from './url.ts';
 import { createFileLogger } from './logger.ts';
 import { initTracing } from './provider.ts';
 import { closeAllOpenSpans, createSpanState } from './state.ts';
@@ -143,7 +143,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
   rt.debug(
     'registered; endpoint=',
-    redactUrlUserinfo(config.otlpEndpoint),
+    redactUrlCredentials(config.otlpEndpoint),
     'project=',
     config.project,
   );
