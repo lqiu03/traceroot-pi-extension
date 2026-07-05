@@ -340,7 +340,11 @@ export function validateConfig(config: TracerootPiConfig): ConfigIssue[] {
       severity: 'warning',
     });
   }
-  if (config.enabled && !config.localMode && config.otlpEndpoint.toLowerCase().startsWith('http://')) {
+  if (
+    config.enabled &&
+    !config.localMode &&
+    config.otlpEndpoint.toLowerCase().startsWith('http://')
+  ) {
     issues.push({
       path: 'otlpEndpoint',
       message: 'endpoint is not https; the token will be sent in cleartext',
