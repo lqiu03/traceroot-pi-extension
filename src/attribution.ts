@@ -2,11 +2,22 @@
 // git repo slug (derived from the origin remote). All best-effort — a failure
 // yields undefined and the attribute is simply omitted, never an error.
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { hostname, userInfo } from 'node:os';
 import { basename } from 'node:path';
-import { EXTENSION_VERSION } from './version.ts';
 
 const GIT_TIMEOUT_MS = 500;
+const require = createRequire(import.meta.url);
+
+function packageVersion(): string | undefined {
+  try {
+    const packageJson = require('../package.json') as { version?: unknown };
+    return typeof packageJson.version === 'string' ? packageJson.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Cache the in-flight/resolved promise per cwd, so the git lookup runs at most once per
 // directory and concurrent callers share the same result.
 const repoSlugCache = new Map<string, Promise<string | undefined>>();
@@ -88,6 +99,6 @@ export function sessionAttributes(cwd: string): Record<string, string | undefine
     'traceroot.pi.hostname': hostName(),
     'traceroot.pi.username': userName(),
     'traceroot.pi.os': process.platform,
-    'traceroot.pi.extension_version': EXTENSION_VERSION,
+    'traceroot.pi.extension_version': packageVersion(),
   };
 }

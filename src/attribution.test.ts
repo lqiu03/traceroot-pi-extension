@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { parseRepoSlug, repoSlug, sessionAttributes, workspaceName } from './attribution.ts';
 import { initGitRepo, withTempDir } from './test-support.ts';
+
+const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
+const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version: string };
 
 // ---------------------------------------------------------------------------
 // parseRepoSlug — remote-URL shapes
@@ -82,7 +87,7 @@ test('sessionAttributes returns only synchronous attribution, not the async repo
   assert.equal(attrs['traceroot.pi.os'], process.platform);
   assert.ok('traceroot.pi.hostname' in attrs);
   assert.ok('traceroot.pi.username' in attrs);
-  assert.ok('traceroot.pi.extension_version' in attrs);
+  assert.equal(attrs['traceroot.pi.extension_version'], packageJson.version);
 });
 
 test('workspaceName is the cwd basename', () => {

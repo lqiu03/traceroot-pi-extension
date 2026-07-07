@@ -37,13 +37,12 @@
     "access": "public"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
     "test": "node --test src/*.test.ts src/handlers/*.test.ts",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "sync:version": "node scripts/sync-version.mjs",
-    "check": "node scripts/sync-version.mjs --check && tsc --noEmit && node --test src/*.test.ts src/handlers/*.test.ts",
-    "prepack": "node scripts/sync-version.mjs --check"
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -56,8 +55,11 @@
     "@earendil-works/pi-coding-agent": ">=0.79.0 <1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
     "prettier": "^3.8.1",
+    "typescript-eslint": "^8.0.0",
     "typescript": "^5.6.0"
   },
   "engines": {

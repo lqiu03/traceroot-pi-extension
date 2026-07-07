@@ -11,7 +11,14 @@ import { truncateString } from './json.ts';
 const basename = win32.basename;
 
 const MAX_BASH_NAME = 60;
-const TOOL_PATH_ARGUMENT_KEYS = ['path', 'file', 'filePath', 'file_path', 'filename', 'target'] as const;
+const TOOL_PATH_ARGUMENT_KEYS = [
+  'path',
+  'file',
+  'filePath',
+  'file_path',
+  'filename',
+  'target',
+] as const;
 
 function firstPathArgument(args: Record<string, unknown>): string | undefined {
   for (const key of TOOL_PATH_ARGUMENT_KEYS) {

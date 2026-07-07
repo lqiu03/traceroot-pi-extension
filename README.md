@@ -26,13 +26,13 @@ pi install .
 
 Tracing is opt-in. Set the following environment variables before starting pi:
 
-| Variable | Required | Description |
-|---|---|---|
-| `TRACEROOT_ENABLED` | Yes | Set to `true` to enable tracing. |
-| `TRACEROOT_API_KEY` | Yes | Your TraceRoot API key. Find it at [app.traceroot.ai](https://app.traceroot.ai) under Settings > API Keys. |
-| `TRACEROOT_HOST_URL` | No | TraceRoot base URL. Defaults to the hosted service. Set this only when self-hosting. |
-| `TRACEROOT_OTLP_ENDPOINT` | No | Explicit OTLP traces endpoint override. Defaults to `<TRACEROOT_HOST_URL>/api/v1/public/traces`. |
-| `TRACEROOT_PROJECT_ID` | No | Project UUID used to build clickable trace links in the pi UI. |
+| Variable                  | Required | Description                                                                                                |
+| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `TRACEROOT_ENABLED`       | Yes      | Set to `true` to enable tracing.                                                                           |
+| `TRACEROOT_API_KEY`       | Yes      | Your TraceRoot API key. Find it at [app.traceroot.ai](https://app.traceroot.ai) under Settings > API Keys. |
+| `TRACEROOT_HOST_URL`      | No       | TraceRoot base URL. Defaults to the hosted service. Set this only when self-hosting.                       |
+| `TRACEROOT_OTLP_ENDPOINT` | No       | Explicit OTLP traces endpoint override. Defaults to `<TRACEROOT_HOST_URL>/api/v1/public/traces`.           |
+| `TRACEROOT_PROJECT_ID`    | No       | Project UUID used to build clickable trace links in the pi UI.                                             |
 
 Example (add to `~/.zshrc`, `~/.bashrc`, or your shell profile):
 
@@ -53,7 +53,10 @@ Restart pi, or open a new terminal session, after setting the variables.
 
 ```bash
 pnpm install
-pnpm check
+pnpm build
+pnpm typecheck
+pnpm test
+pnpm lint
 pnpm format:check
 ```
 
