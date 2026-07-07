@@ -24,15 +24,14 @@ export function setStatus(
   }
 }
 
-export function setTraceWidget(
+export function updateTraceLinkWidget(
   ctx: ExtensionContext | undefined,
-  config: TracerootPiConfig,
-  url: string | null,
-  traceId: string | null,
+  details: { enabled: boolean; traceUrl: string | null; traceId: string | null },
 ): void {
   try {
-    if (!ctx?.hasUI || !config.showUiIndicator) return;
-    const line = url ?? (traceId ? `Traceroot trace: ${traceId}` : undefined);
+    if (!ctx?.hasUI || !details.enabled) return;
+    const line =
+      details.traceUrl ?? (details.traceId ? `Traceroot trace: ${details.traceId}` : undefined);
     if (!line) return;
     ctx.ui.setWidget(WIDGET_KEY, [line], { placement: 'belowEditor' });
   } catch {

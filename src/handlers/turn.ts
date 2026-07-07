@@ -8,7 +8,7 @@ import { sweepTurnScoped } from '../state.ts';
 import { finalizeProjectConfig } from '../project-config.ts';
 import { openSessionSpan } from './session-span.ts';
 import { buildTraceUrl } from '../url.ts';
-import { setConfigIssue, setStatus, setTraceWidget, STATUS_ACTIVE } from '../ui.ts';
+import { setConfigIssue, setStatus, updateTraceLinkWidget, STATUS_ACTIVE } from '../ui.ts';
 import type { TracerootPiConfig } from '../config.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -90,7 +90,11 @@ export function registerTurn(rt: Runtime): void {
     setStatus(ctx, config, STATUS_ACTIVE);
     surfaceConfigIssue(rt, ctx);
     const url = buildTraceUrl(config, state.sessionTraceId);
-    setTraceWidget(ctx, config, url, state.sessionTraceId);
+    updateTraceLinkWidget(ctx, {
+      enabled: config.showUiIndicator,
+      traceUrl: url,
+      traceId: state.sessionTraceId,
+    });
 
     const turnSpan = rt.tracer.startSpan(
       'pi.turn',

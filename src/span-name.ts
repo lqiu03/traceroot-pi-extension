@@ -11,11 +11,20 @@ import { truncateString } from './json.ts';
 const basename = win32.basename;
 
 const MAX_BASH_NAME = 60;
+const TOOL_PATH_ARGUMENT_KEYS = ['path', 'file', 'filePath', 'file_path', 'filename', 'target'] as const;
 
-export function formatToolSpanName(toolName: string, args: unknown): string {
+function firstPathArgument(args: Record<string, unknown>): string | undefined {
+  for (const key of TOOL_PATH_ARGUMENT_KEYS) {
+    const value = args[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
+export function describeToolCallSpan(toolName: string, args: unknown): string {
   if (args && typeof args === 'object') {
     const a = args as Record<string, unknown>;
-    const pathLike = a.path ?? a.file ?? a.filePath ?? a.file_path ?? a.filename ?? a.target;
+    const pathLike = firstPathArgument(a);
     if (typeof pathLike === 'string' && pathLike) return `${toolName}: ${basename(pathLike)}`;
     if (toolName === 'bash' && typeof a.command === 'string' && a.command) {
       const cmd = a.command.replace(/\s+/g, ' ').trim();

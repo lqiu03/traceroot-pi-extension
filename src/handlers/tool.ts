@@ -6,7 +6,7 @@ import { SpanKind } from '@opentelemetry/api';
 import { endSpan, setAttr, setErrorStatus } from '../attributes.ts';
 import { safeJsonTruncate } from '../json.ts';
 import { IO_LIMITS, renderToolResult } from '../content.ts';
-import { formatToolSpanName } from '../span-name.ts';
+import { describeToolCallSpan } from '../span-name.ts';
 import { activeParentCtx } from '../state.ts';
 import { safeOn } from '../runtime.ts';
 import type { Runtime } from '../runtime.ts';
@@ -55,7 +55,7 @@ export function registerTool(rt: Runtime): void {
     // still ship the first 60 chars of every shell command (enough for a pasted
     // Authorization header) despite the user's explicit opt-out.
     const span = rt.tracer.startSpan(
-      config.captureToolIo ? formatToolSpanName(toolName, event?.args) : toolName,
+      config.captureToolIo ? describeToolCallSpan(toolName, event?.args) : toolName,
       { kind: SpanKind.INTERNAL },
       parentCtx,
     );
