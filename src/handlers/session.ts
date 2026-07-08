@@ -132,7 +132,7 @@ export function registerSession(rt: Runtime): void {
     if (state.providerShutdown) return;
     const event = raw as SessionShutdownEvent;
     setStatus(ctx as ExtensionContext, config, STATUS_INACTIVE);
-    // Drop the closed session's trace-URL widget; the next agent_start sets a fresh
+    // Drop the closed session's trace widget; the next agent_start sets a fresh
     // one. Without this the TUI keeps advertising a trace that is no longer live.
     clearWidget(ctx as ExtensionContext);
     // The last assistant response becomes the session's Output panel — written inside

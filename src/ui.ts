@@ -1,4 +1,4 @@
-// TUI status indicator and trace-URL widget. Every call is guarded: a mode that
+// TUI status indicator and trace widget. Every call is guarded: a mode that
 // lacks the method, or any throw, is swallowed so UI is never a failure surface.
 import type { TracerootPiConfig } from './config.ts';
 import type { ExtensionContext } from './types.ts';
@@ -10,7 +10,7 @@ export const STATUS_ACTIVE = 'Traceroot ●';
 export const STATUS_INACTIVE = 'Traceroot ○';
 
 // README documents TRACEROOT_SHOW_UI as controlling the status indicator AND the
-// trace-URL widget; both must honor it or opting out leaves a permanent "Traceroot ●"
+// trace widget; both must honor it or opting out leaves a permanent "Traceroot ●"
 // in the status bar.
 export function setStatus(
   ctx: ExtensionContext | undefined,
@@ -26,14 +26,13 @@ export function setStatus(
 
 export function updateTraceLinkWidget(
   ctx: ExtensionContext | undefined,
-  details: { enabled: boolean; traceUrl: string | null; traceId: string | null },
+  details: { enabled: boolean; traceId: string | null },
 ): void {
   try {
-    if (!ctx?.hasUI || !details.enabled) return;
-    const line =
-      details.traceUrl ?? (details.traceId ? `Traceroot trace: ${details.traceId}` : undefined);
-    if (!line) return;
-    ctx.ui.setWidget(WIDGET_KEY, [line], { placement: 'belowEditor' });
+    if (!ctx?.hasUI || !details.enabled || !details.traceId) return;
+    ctx.ui.setWidget(WIDGET_KEY, [`Traceroot trace: ${details.traceId}`], {
+      placement: 'belowEditor',
+    });
   } catch {
     /* ui unavailable in this mode */
   }

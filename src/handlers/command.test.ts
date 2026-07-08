@@ -1,45 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { browserLaunch, flushNotification, isLaunchableUrl, registerCommand } from './command.ts';
+import { flushNotification, registerCommand } from './command.ts';
 import { commandRuntime, recordingTracer } from '../test-support.ts';
-
-const URL = 'https://app.traceroot.ai/trace/abc?traceId=deadbeef';
-
-test('isLaunchableUrl accepts clean http(s) URLs and rejects injection/non-http', () => {
-  assert.equal(isLaunchableUrl(URL), true);
-  assert.equal(isLaunchableUrl('http://localhost:3000/projects/p/traces?traceId=t'), true);
-  // cmd.exe shell-operator injection attempts must be rejected.
-  assert.equal(isLaunchableUrl('http://x&calc'), false);
-  assert.equal(isLaunchableUrl('http://x|whoami'), false);
-  assert.equal(isLaunchableUrl('http://x>out'), false);
-  assert.equal(isLaunchableUrl('http://x y'), false); // whitespace
-  assert.equal(isLaunchableUrl('http://host/%USERNAME%'), false); // cmd.exe %VAR% expansion
-  // Non-http(s) schemes must be rejected.
-  assert.equal(isLaunchableUrl('file:///etc/passwd'), false);
-  assert.equal(isLaunchableUrl('javascript:alert(1)'), false);
-  assert.equal(isLaunchableUrl('not a url'), false);
-});
-
-test('browserLaunch routes Windows through cmd.exe, not the `start` builtin', () => {
-  const launch = browserLaunch('win32', URL);
-  // `start` is a cmd builtin, not an executable on PATH; spawning it directly
-  // fails with ENOENT. The empty "" is start's title arg so the URL is not
-  // consumed as a window title.
-  assert.deepEqual(launch, { command: 'cmd', args: ['/c', 'start', '', URL] });
-});
-
-test('browserLaunch uses `open` on macOS', () => {
-  assert.deepEqual(browserLaunch('darwin', URL), { command: 'open', args: [URL] });
-});
-
-test('browserLaunch uses `xdg-open` on Linux', () => {
-  assert.deepEqual(browserLaunch('linux', URL), { command: 'xdg-open', args: [URL] });
-});
-
-test('browserLaunch returns null on unsupported platforms', () => {
-  assert.equal(browserLaunch('freebsd', URL), null);
-  assert.equal(browserLaunch('aix', URL), null);
-});
 
 // ---------------------------------------------------------------------------
 // /traceroot command subcommands
@@ -100,7 +62,7 @@ test('/traceroot disable then enable toggles sessionDisabled', async () => {
   assert.equal(rt.state.sessionDisabled, false, 'enable turns it back on');
 });
 
-test('/traceroot disable clears the trace-URL widget', async () => {
+test('/traceroot disable clears the trace widget', async () => {
   // A widget advertising the disabled session's trace URL directly contradicts the
   // "tracing disabled" notice next to it.
   const { rt, run, widgetCalls } = commandRuntime();
@@ -128,11 +90,13 @@ test('/traceroot disable records the session output before closing the span', as
 
 test('a command that throws surfaces a user-facing error, not just a debug line', async () => {
   // A user invoked the command, so a failure must reach them. Force a throw inside the
-  // handler by making buildTraceUrl blow up (uiUrl is not a string) on a UUID projectId.
+  // handler via a state field that throws on read when the status case accesses it.
   const { rt, run, notifications } = commandRuntime();
-  (rt.config as unknown as { uiUrl: unknown }).uiUrl = undefined;
-  rt.config.projectId = '123e4567-e89b-12d3-a456-426614174000';
-  rt.state.sessionTraceId = 't'.repeat(32);
+  Object.defineProperty(rt.state, 'sessionDisabled', {
+    get() {
+      throw new Error('boom');
+    },
+  });
   registerCommand(rt);
   await run('status');
   assert.ok(
@@ -149,21 +113,6 @@ test('/traceroot status reports config and session state', async () => {
   assert.match(status, /enabled=true/);
   assert.match(status, /project=pi/);
   assert.match(status, /session=active/);
-});
-
-test('/traceroot open distinguishes a malformed projectId from an unset one', async () => {
-  const { rt, run, notifications } = commandRuntime();
-  rt.config.projectId = 'my-project'; // set, but not a UUID
-  rt.state.sessionTraceId = 't'.repeat(32);
-  registerCommand(rt);
-  await run('open');
-  const msg = notifications.at(-1)?.message ?? '';
-  assert.match(
-    msg,
-    /not a valid UUID/i,
-    'tells the user the format is wrong, not that it is unset',
-  );
-  assert.doesNotMatch(msg, /set TRACEROOT_PROJECT_ID and run/i);
 });
 
 test('/traceroot status redacts credentials embedded in the endpoint', async () => {

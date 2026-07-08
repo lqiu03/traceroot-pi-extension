@@ -14,12 +14,3 @@ export function isTraceId(value: string | null | undefined): value is string {
 export function isSpanId(value: string | null | undefined): value is string {
   return typeof value === 'string' && SPAN_ID.test(value) && !ALL_ZERO.test(value);
 }
-
-// A project UUID (8-4-4-4-12 hex, any version/variant, case-insensitive). The trace-URL
-// route embeds it; a non-UUID projectId builds a link that 404s, so both url.ts (skip
-// the link) and config.ts (warn the user) share this check.
-const PROJECT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isProjectUuid(value: string | null | undefined): value is string {
-  return typeof value === 'string' && PROJECT_UUID.test(value);
-}

@@ -17,7 +17,6 @@ import {
 // reformatting/renames because it checks behavior, not source text.
 const DRIFT_CASES = [
   { key: 'project', value: 'repo-x', baseline: 'base-project' },
-  { key: 'projectId', value: 'uuid-x', baseline: undefined },
   { key: 'showUiIndicator', value: false, baseline: true },
   { key: 'debug', value: true, baseline: false },
 ] as const;
@@ -80,12 +79,11 @@ test('applies allowed project-local fields', () => {
   const applied = applyProjectLocal(
     config,
     base,
-    { project: 'my-test-project', projectId: 'uuid-1', showUiIndicator: false },
+    { project: 'my-test-project', showUiIndicator: false },
     new Set<keyof TracerootPiConfig>(),
   );
-  assert.deepEqual(applied.sort(), ['project', 'projectId', 'showUiIndicator']);
+  assert.deepEqual(applied.sort(), ['project', 'showUiIndicator']);
   assert.equal(config.project, 'my-test-project');
-  assert.equal(config.projectId, 'uuid-1');
   assert.equal(config.showUiIndicator, false);
 });
 
@@ -121,11 +119,10 @@ test('ignores project-local values whose runtime type does not match the field',
   const applied = applyProjectLocal(
     config,
     base,
-    { projectId: 42, debug: 'yes', showUiIndicator: 'true' } as Record<string, unknown>,
+    { debug: 'yes', showUiIndicator: 'true' } as Record<string, unknown>,
     new Set<keyof TracerootPiConfig>(),
   );
   assert.deepEqual(applied, [], 'type-mismatched values are not applied');
-  assert.equal(config.projectId, undefined, 'a numeric projectId is rejected');
   assert.equal(config.debug, false, 'a string debug does not turn debug on');
   assert.equal(config.showUiIndicator, true, 'a string showUiIndicator keeps the default');
 });

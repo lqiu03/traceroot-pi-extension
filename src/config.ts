@@ -11,7 +11,6 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { isProjectUuid } from './hex.ts';
 
 export interface ConfigIssue {
   path: string;
@@ -27,9 +26,7 @@ export interface TracerootPiConfig {
   localMode: boolean;
   apiUrl: string;
   otlpEndpoint: string;
-  uiUrl: string;
   project: string;
-  projectId?: string;
   serviceName: string;
   environment: string;
   githubOwner?: string;
@@ -58,9 +55,7 @@ export type RawConfig = Partial<{
   localMode: boolean;
   apiUrl: string;
   otlpEndpoint: string;
-  uiUrl: string;
   project: string;
-  projectId: string;
   serviceName: string;
   environment: string;
   githubOwner: string;
@@ -218,9 +213,7 @@ export function envRaw(): RawConfig {
     localMode: boolEnv('TRACEROOT_LOCAL_MODE'),
     apiUrl: firstStrEnv('TRACEROOT_HOST_URL', 'TRACEROOT_API_URL'),
     otlpEndpoint: strEnv('TRACEROOT_OTLP_ENDPOINT'),
-    uiUrl: strEnv('TRACEROOT_UI_URL'),
     project: strEnv('TRACEROOT_PROJECT'),
-    projectId: strEnv('TRACEROOT_PROJECT_ID'),
     serviceName: strEnv('TRACEROOT_SERVICE_NAME'),
     environment: strEnv('TRACEROOT_ENVIRONMENT'),
     githubOwner: strEnv('TRACEROOT_GITHUB_OWNER'),
@@ -287,7 +280,6 @@ function primitiveMetadata(
 export function resolve(raw: RawConfig): TracerootPiConfig {
   const localMode = raw.localMode ?? false;
   const apiUrl = raw.apiUrl ?? (localMode ? 'http://localhost:8000' : 'https://app.traceroot.ai');
-  const uiUrl = raw.uiUrl ?? (localMode ? 'http://localhost:3000' : 'https://app.traceroot.ai');
   const otlpEndpoint = raw.otlpEndpoint ?? `${apiUrl.replace(/\/+$/, '')}/api/v1/public/traces`;
   return {
     enabled: raw.enabled ?? false,
@@ -295,9 +287,7 @@ export function resolve(raw: RawConfig): TracerootPiConfig {
     localMode,
     apiUrl,
     otlpEndpoint,
-    uiUrl,
     project: raw.project ?? 'pi',
-    projectId: raw.projectId,
     serviceName: raw.serviceName ?? 'pi-agent',
     environment: raw.environment ?? 'development',
     githubOwner: raw.githubOwner,
@@ -328,7 +318,7 @@ function isHttpUrl(value: string): boolean {
 // Surface the misconfigurations that actually break or weaken tracing.
 export function validateConfig(config: TracerootPiConfig): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
-  for (const name of ['apiUrl', 'uiUrl', 'otlpEndpoint'] as const) {
+  for (const name of ['apiUrl', 'otlpEndpoint'] as const) {
     if (!isHttpUrl(config[name])) {
       issues.push({ path: name, message: `${name} must be an http(s) URL`, severity: 'error' });
     }
@@ -348,14 +338,6 @@ export function validateConfig(config: TracerootPiConfig): ConfigIssue[] {
     issues.push({
       path: 'otlpEndpoint',
       message: 'endpoint is not https; the token will be sent in cleartext',
-      severity: 'warning',
-    });
-  }
-  if (config.enabled && config.projectId && !isProjectUuid(config.projectId)) {
-    issues.push({
-      path: 'projectId',
-      message:
-        'projectId (TRACEROOT_PROJECT_ID) is set but is not a UUID; trace-link URLs will be unavailable',
       severity: 'warning',
     });
   }
@@ -441,9 +423,7 @@ export const STRING_CONFIG_FIELDS = [
   'token',
   'apiUrl',
   'otlpEndpoint',
-  'uiUrl',
   'project',
-  'projectId',
   'serviceName',
   'environment',
   'githubOwner',

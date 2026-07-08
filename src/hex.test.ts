@@ -1,17 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isProjectUuid, isSpanId, isTraceId } from './hex.ts';
-
-test('isProjectUuid accepts 8-4-4-4-12 hex (any case), rejects everything else', () => {
-  assert.equal(isProjectUuid('123e4567-e89b-12d3-a456-426614174000'), true);
-  assert.equal(isProjectUuid('123E4567-E89B-12D3-A456-426614174000'), true, 'uppercase ok');
-  assert.equal(isProjectUuid('my-project'), false, 'human-readable name');
-  assert.equal(isProjectUuid('123e4567e89b12d3a456426614174000'), false, 'no hyphens');
-  assert.equal(isProjectUuid('123e4567-e89b-12d3-a456-42661417400'), false, 'too short');
-  assert.equal(isProjectUuid(''), false);
-  assert.equal(isProjectUuid(undefined), false);
-  assert.equal(isProjectUuid(null), false);
-});
+import { isSpanId, isTraceId } from './hex.ts';
 
 test('isTraceId accepts 32 lowercase hex chars only', () => {
   assert.equal(isTraceId('a'.repeat(32)), true);

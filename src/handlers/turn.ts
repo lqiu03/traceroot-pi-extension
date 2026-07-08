@@ -7,7 +7,6 @@ import { safeJsonTruncate } from '../json.ts';
 import { sweepTurnScoped } from '../state.ts';
 import { finalizeProjectConfig } from '../project-config.ts';
 import { openSessionSpan } from './session-span.ts';
-import { buildTraceUrl } from '../url.ts';
 import { setConfigIssue, setStatus, updateTraceLinkWidget, STATUS_ACTIVE } from '../ui.ts';
 import type { TracerootPiConfig } from '../config.ts';
 import { safeOn } from '../runtime.ts';
@@ -89,10 +88,8 @@ export function registerTurn(rt: Runtime): void {
 
     setStatus(ctx, config, STATUS_ACTIVE);
     surfaceConfigIssue(rt, ctx);
-    const url = buildTraceUrl(config, state.sessionTraceId);
     updateTraceLinkWidget(ctx, {
       enabled: config.showUiIndicator,
-      traceUrl: url,
       traceId: state.sessionTraceId,
     });
 

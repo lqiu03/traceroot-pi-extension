@@ -160,7 +160,7 @@ test('providerShutdown is process-scoped and survives a new session', async () =
 // session_shutdown — provider lifecycle (flush always; shutdown only on quit)
 // ---------------------------------------------------------------------------
 
-test('session_shutdown clears the trace-URL widget', async () => {
+test('session_shutdown clears the trace widget', async () => {
   // Without this the TUI keeps advertising the closed session's trace URL until the
   // next agent_start happens to overwrite it.
   const widgetCalls: Array<{ key: string; content: unknown }> = [];

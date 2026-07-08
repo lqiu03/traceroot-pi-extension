@@ -200,7 +200,6 @@ export function commandRuntime(stateOverrides: Partial<SpanState> = {}) {
       project: 'pi',
       otlpEndpoint: 'http://localhost:8000',
       enabled: true,
-      uiUrl: 'http://localhost:3000',
       captureContent: true,
       showUiIndicator: true,
     },

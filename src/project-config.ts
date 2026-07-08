@@ -16,7 +16,7 @@ import type { ExtensionContext } from './types.ts';
 // The fields a trusted project-local file is permitted to override. Declared as a union
 // so FIELD_SPECS can be checked against it (a spec keyed on a non-overridable field fails
 // to compile) and so ProjectLocalBaseline picks exactly these from the config.
-type ProjectLocalField = 'project' | 'projectId' | 'showUiIndicator' | 'debug';
+type ProjectLocalField = 'project' | 'showUiIndicator' | 'debug';
 
 // The env/global baseline of the overridable fields, snapshotted once at extension load
 // (captureProjectLocalBaseline) and threaded into every applyProjectLocal call. pi reuses
@@ -33,7 +33,6 @@ export type ProjectLocalBaseline = Pick<TracerootPiConfig, ProjectLocalField>;
 export function captureProjectLocalBaseline(config: TracerootPiConfig): ProjectLocalBaseline {
   return {
     project: config.project,
-    projectId: config.projectId,
     showUiIndicator: config.showUiIndicator,
     debug: config.debug,
   };
@@ -55,7 +54,6 @@ const isBoolean = (value: unknown): value is boolean => typeof value === 'boolea
 // so applyProjectLocal can loop generically with no per-field blocks and no casts.
 const FIELD_SPECS = [
   { key: 'project', valid: isString },
-  { key: 'projectId', valid: isString },
   { key: 'showUiIndicator', valid: isBoolean },
   { key: 'debug', valid: isBoolean },
 ] as const satisfies readonly FieldSpec<ProjectLocalField>[];
